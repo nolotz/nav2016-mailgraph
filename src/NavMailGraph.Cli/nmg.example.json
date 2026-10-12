@@ -1,0 +1,22 @@
+{
+  "_comment": "Example config for nmg. Copy to nmg.local.json (git-ignored) or pass --config PATH. Keys = long options without '--'; command-line values override this file. Never put real secrets here; use secret-env / cert-password-env.",
+  "tenant": "contoso.onmicrosoft.com",
+  "client": "00000000-0000-0000-0000-000000000000",
+  "secret-env": "NMG_CLIENT_SECRET",
+  "_comment_cert": "Instead of secret-env: \"cert-pfx\": \"./nmg-app.pfx\", \"cert-password-env\": \"NMG_PFX_PASSWORD\"  or  \"cert-thumbprint\": \"0123456789ABCDEF0123456789ABCDEF01234567\"",
+  "token-library": "builtin",
+  "cloud": "global",
+  "timeout": 100,
+  "retries": 3,
+  "send-x5c": false,
+  "log": "",
+  "verbose": false,
+  "from": "NAV <nav@contoso.com>",
+  "mailbox": "",
+  "to": ["you@contoso.com"],
+  "subject": "nmg test mail",
+  "body": "Hello from nmg.",
+  "html": false,
+  "attach": [],
+  "no-draft": false
+}

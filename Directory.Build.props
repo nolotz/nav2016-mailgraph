@@ -1,0 +1,32 @@
+<Project>
+  <PropertyGroup>
+    <!-- Package/file version of a release. Bump this for every release. -->
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <!--
+      AssemblyVersion is pinned on purpose: NAV 2016 C/AL DotNet variables bind to the exact
+      assembly version string ('NavMailGraph, Version=1.0.0.0, ...'). Changing it would force a
+      change in every C/AL object that declares a DotNet variable. FileVersion/InformationalVersion
+      carry the real release number instead.
+    -->
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>$(VersionPrefix).0</FileVersion>
+    <InformationalVersion>$(VersionPrefix)</InformationalVersion>
+
+    <LangVersion>10</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>CS1591</WarningsNotAsErrors>
+    <Deterministic>true</Deterministic>
+    <Authors>nav2016-mailgraph contributors</Authors>
+    <Product>NavMailGraph</Product>
+    <Copyright>Copyright (c) 2026 nav2016-mailgraph contributors</Copyright>
+    <RepositoryUrl>https://github.com/nolotz/nav2016-mailgraph</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+
+    <!-- Target framework for tooling (tests, CLI) that runs on macOS/Linux/Windows with the modern runtime. -->
+    <ToolsTargetFramework>net8.0</ToolsTargetFramework>
+    <!-- Target frameworks of the add-in assemblies: NAV 2016 needs .NET Framework; netstandard2.0 lets tests/CLI run on macOS. -->
+    <AddinTargetFrameworks>net462;netstandard2.0</AddinTargetFrameworks>
+  </PropertyGroup>
+</Project>

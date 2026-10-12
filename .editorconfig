@@ -1,0 +1,24 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+[*.{cs,csproj,props,targets,sln}]
+indent_size = 4
+
+[*.{md,yml,yaml,json}]
+indent_size = 2
+
+[*.ps1]
+indent_size = 4
+
+# NAV C/AL text exports are OEM code page (CP850) + CRLF, as C/SIDE writes them; keep them as-is
+[*.TXT]
+end_of_line = crlf
+trim_trailing_whitespace = false
+insert_final_newline = false

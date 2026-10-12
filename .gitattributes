@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.TXT text eol=crlf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.pfx binary
+*.png binary

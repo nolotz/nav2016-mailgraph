@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>$(AddinTargetFrameworks)</TargetFrameworks>
+    <AssemblyName>NavMailGraph</AssemblyName>
+    <RootNamespace>NavMailGraph</RootNamespace>
+    <Description>Sends e-mail through Microsoft Graph (application permissions) for Dynamics NAV 2016. Zero NuGet dependencies.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Single-file deployment into the NAV Add-ins folder: no NuGet dependencies allowed in this project. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net462'">
+    <!-- In-box assemblies of .NET Framework 4.6.2 (never the System.Net.Http NuGet package: it conflicts on net462). -->
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Runtime.Serialization" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NavMailGraph.Tests" />
+  </ItemGroup>
+
+</Project>

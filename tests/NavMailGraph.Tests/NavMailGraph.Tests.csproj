@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- On Windows the tests also run on the real .NET Framework runtime (what NAV uses); on macOS/Linux only on the modern runtime. -->
+    <TargetFrameworks>$(ToolsTargetFramework)</TargetFrameworks>
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(ToolsTargetFramework);net462</TargetFrameworks>
+    <IsPackable>false</IsPackable>
+    <!-- Run on the newest installed runtime (8, 9, 10, ...): .NET 8 support ends 2026-11-10. -->
+    <RollForward>Major</RollForward>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyVersion>$(VersionPrefix).0</AssemblyVersion>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <!-- xunit.runner.visualstudio 3.x needs net472+; the net462 test leg uses the last 2.x runner. -->
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" Condition="'$(TargetFramework)' != 'net462'" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" Condition="'$(TargetFramework)' == 'net462'" />
+    <PackageReference Include="coverlet.collector" Version="10.1.0" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net462'">
+    <!-- In-box on .NET Framework (never the System.Net.Http NuGet package). -->
+    <Reference Include="System.Net.Http" />
+    <!-- System.Text.Json is only used by the tests to inspect request bodies; it is in-box on net8.0. -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != 'net462'">
+    <!-- Pkcs12Builder: bundles a CertificateRequest certificate with its key into a PFX without CopyWithPrivateKey,
+         which fails on macOS without a writable default keychain ("The specified item is no longer valid"). -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/NavMailGraph/NavMailGraph.csproj" />
+    <ProjectReference Include="../../src/NavMailGraph.Msal/NavMailGraph.Msal.csproj" />
+  </ItemGroup>
+
+</Project>

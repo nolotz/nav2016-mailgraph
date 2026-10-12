@@ -1,0 +1,387 @@
+OBJECT Codeunit 50400 Graph Mail
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG1.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 409=r,
+                TableData 1261=rimd;
+  }
+  CODE
+  {
+    VAR
+      GraphMessage@1000 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailMessage";
+      GraphSender@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailSender";
+      MailManagement@1002 : Codeunit 9520;
+      FileManagement@1003 : Codeunit 419;
+      SendResult@1004 : Text;
+      AttachmentNotFoundErr@1010 : TextConst 'DEU=Der Anhang %1 existiert nicht oder ist fÅr das Programm nicht zugÑnglich.;ENU=Attachment %1 does not exist or can not be accessed from the program.';
+      SendErr@1011 : TextConst 'DEU=Microsoft Graph hat folgenden Fehler gemeldet: %1;ENU=Microsoft Graph returned the following error: %1';
+      NoMessageErr@1012 : TextConst 'DEU=Es wurde keine E-Mail-Nachricht erstellt. Rufen Sie zuerst CreateMessage auf.;ENU=No e-mail message has been created. Call CreateMessage first.';
+      SenderMissingErr@1013 : TextConst 'DEU=Eine Absenderadresse ist erforderlich. Geben Sie in der SMTP-E-Mail-Einrichtung ein Graph-Absenderpostfach an, oder Åbergeben Sie eine Absenderadresse.;ENU=A sender address is required. Enter a Graph Sender Mailbox in the SMTP Mail Setup, or pass a sender address.';
+      SecretMissingErr@1014 : TextConst 'DEU=FÅr Microsoft Graph ist kein geheimer ClientschlÅssel gespeichert. Geben Sie den geheimen ClientschlÅssel in der SMTP-E-Mail-Einrichtung ein.;ENU=No client secret is stored for Microsoft Graph. Enter the client secret in the SMTP Mail Setup.';
+      AddInMissingErr@1015 : TextConst 'DEU=Das Add-In NavMailGraph.dll (Version 1.0.0.0) kann auf dem Server nicht geladen werden. Kopieren Sie es in den Ordner Add-ins des Microsoft Dynamics NAV Servers, und starten Sie die Serverinstanz neu.;ENU=The add-in NavMailGraph.dll (version 1.0.0.0) cannot be loaded on the server. Copy it to the Add-ins folder of the Microsoft Dynamics NAV Server and restart the server instance.';
+      UnknownErr@1016 : TextConst 'DEU=Der Aufruf von Microsoft Graph ist aus unbekanntem Grund fehlgeschlagen.;ENU=The call to Microsoft Graph failed for an unknown reason.';
+      SMTPMessageNotSupportedErr@1017 : TextConst 'DEU=Das SMTP-Nachrichtenobjekt ist nicht verfÅgbar, weil E-Mails Åber Microsoft Graph versendet werden (Feld Mailversand in der SMTP-E-Mail-Einrichtung).;ENU=The SMTP message object is not available because e-mail is sent through Microsoft Graph (field Mail Transport in the SMTP Mail Setup).';
+      ConnectionOkMsg@1018 : TextConst 'DEU=Die Verbindung zu Microsoft Graph wurde erfolgreich hergestellt (Zugriffstoken erhalten).;ENU=The connection to Microsoft Graph was established successfully (access token received).';
+      ConnectionFailedErr@1019 : TextConst 'DEU=Der Verbindungstest ist fehlgeschlagen: %1;ENU=The connection test failed: %1';
+      TestMailSentMsg@1020 : TextConst 'DEU=Eine Test-E-Mail wurde Åber Microsoft Graph an %1 gesendet.;ENU=A test e-mail was sent to %1 through Microsoft Graph.';
+      TestRecipientMissingErr@1021 : TextConst 'DEU=Geben Sie eine EmpfÑngeradresse fÅr die Test-E-Mail an.;ENU=Enter a recipient address for the test e-mail.';
+      TestMailSubjectTxt@1022 : TextConst 'DEU=Microsoft Dynamics NAV Test-E-Mail (Microsoft Graph);ENU=Microsoft Dynamics NAV test e-mail (Microsoft Graph)';
+      TestMailBodyTxt@1023 : TextConst 'DEU=<p>Dies ist eine Test-E-Mail aus Microsoft Dynamics NAV, versendet Åber Microsoft Graph.</p><p>Benutzer: %1<br/>Serverinstanz: %2<br/>Graph-Mandanten-ID: %3<br/>Graph-Anwendungs-ID: %4<br/>Authentifizierung: %5<br/>Absenderpostfach: %6<br/>Cloud: %7<br/>Token-Bibliothek: %8<br/>Add-In-Version: %9</p>;ENU=<p>This is a test e-mail from Microsoft Dynamics NAV, sent through Microsoft Graph.</p><p>User: %1<br/>Server instance: %2<br/>Graph tenant ID: %3<br/>Graph client ID: %4<br/>Authentication: %5<br/>Sender mailbox: %6<br/>Cloud: %7<br/>Token library: %8<br/>Add-in version: %9</p>';
+      SecretNotEncryptedMsg@1024 : TextConst 'DEU=Der geheime ClientschlÅssel wurde gespeichert, aber nicht verschlÅsselt, da fÅr diese Datenbank kein VerschlÅsselungsschlÅssel vorhanden ist. Richten Sie die DatenverschlÅsselung ein, damit der SchlÅssel verschlÅsselt gespeichert wird.;ENU=The client secret was stored, but it is not encrypted because no encryption key exists for this database. Set up data encryption so that the secret is stored encrypted.';
+
+    PROCEDURE CreateMessage@1(SenderName@1000 : Text;SenderAddress@1001 : Text;Recipients@1002 : Text;Subject@1003 : Text;Body@1004 : Text;HtmlFormatted@1005 : Boolean);
+    VAR
+      SMTPMailSetup@1006 : Record 409;
+      SenderMailbox@1007 : Text;
+    BEGIN
+      // Same address validation as Codeunit 400 (Codeunit 9520). A blank sender is accepted here when a fixed
+      // Graph Sender Mailbox is configured, because the mailbox then becomes the From address.
+      IF Recipients <> '' THEN
+        MailManagement.CheckValidEmailAddresses(Recipients);
+      IF SenderAddress <> '' THEN
+        MailManagement.CheckValidEmailAddresses(SenderAddress);
+
+      SMTPMailSetup.GET;
+      SenderMailbox := SMTPMailSetup."Graph Sender Mailbox";
+      IF (SenderMailbox = '') AND (SenderAddress = '') THEN
+        ERROR(SenderMissingErr);
+
+      CLEAR(GraphMessage);
+      SendResult := '';
+      // Clear error instead of NAV's generic DotNet instantiation error when NavMailGraph.dll is missing.
+      IF NOT CANLOADTYPE(GraphMessage) THEN
+        ERROR(AddInMissingErr);
+      GraphMessage := GraphMessage.GraphMailMessage;
+      GraphMessage.FromName := SenderName;
+      IF SenderMailbox <> '' THEN BEGIN
+        // Fixed mailbox: always send as the mailbox (no Send As needed). The caller's address goes to Reply-To.
+        GraphMessage.FromAddress := SenderMailbox;
+        IF SMTPMailSetup."Graph Reply-To Caller" AND (SenderAddress <> '') THEN
+          IF LOWERCASE(SenderAddress) <> LOWERCASE(SenderMailbox) THEN
+            GraphMessage.AddReplyTo(SenderAddress);
+      END ELSE
+        // No fixed mailbox: the caller's From address is the mailbox used in /users/<mailbox>/sendMail.
+        GraphMessage.FromAddress := SenderAddress;
+
+      IF Recipients <> '' THEN
+        GraphMessage.AddRecipients(Recipients);
+      GraphMessage.Subject := Subject;
+      GraphMessage.Body := Body;
+      GraphMessage.HtmlFormatted := HtmlFormatted;
+    END;
+
+    PROCEDURE AddAttachment@2(Attachment@1000 : Text;FileName@1001 : Text);
+    BEGIN
+      // Mirrors Codeunit 400: blank path is ignored, a missing server file is an error, the display name is
+      // cleaned with Codeunit 419 and ';' is removed. The add-in reads the file at Send time.
+      IF Attachment = '' THEN
+        EXIT;
+      CheckMessageCreated;
+      IF NOT EXISTS(Attachment) THEN
+        ERROR(AttachmentNotFoundErr,Attachment);
+      FileName := FileManagement.StripNotsupportChrInFileName(FileName);
+      FileName := DELCHR(FileName,'=',';');
+      GraphMessage.AddAttachment(Attachment,FileName);
+    END;
+
+    PROCEDURE Send@3();
+    BEGIN
+      IF NOT TrySend THEN
+        ERROR(SendErr,SendResult);
+    END;
+
+    PROCEDURE AddRecipients@4(Recipients@1000 : Text);
+    BEGIN
+      CheckMessageCreated;
+      MailManagement.CheckValidEmailAddresses(Recipients);
+      GraphMessage.AddRecipients(Recipients);
+    END;
+
+    PROCEDURE AddCC@5(Recipients@1000 : Text);
+    BEGIN
+      CheckMessageCreated;
+      MailManagement.CheckValidEmailAddresses(Recipients);
+      GraphMessage.AddCC(Recipients);
+    END;
+
+    PROCEDURE AddBCC@6(Recipients@1000 : Text);
+    BEGIN
+      CheckMessageCreated;
+      MailManagement.CheckValidEmailAddresses(Recipients);
+      GraphMessage.AddBCC(Recipients);
+    END;
+
+    PROCEDURE AppendBody@7(BodyPart@1000 : Text);
+    BEGIN
+      CheckMessageCreated;
+      GraphMessage.AppendBody(BodyPart);
+    END;
+
+    PROCEDURE GetLastSendMailErrorText@9() : Text;
+    BEGIN
+      EXIT(SendResult);
+    END;
+
+    PROCEDURE TrySend@10() : Boolean;
+    BEGIN
+      // Same contract as Codeunit 400.TrySend: never raises an error, returns SendResult = ''.
+      // Configuration errors (missing tenant, secret, add-in ...) are caught by TryDoSend and end up in SendResult,
+      // so Codeunit 9520 (HideSMTPError) and GetLastSendMailErrorText behave exactly like with SMTP.
+      SendResult := '';
+      CLEARLASTERROR;
+      IF NOT TryDoSend THEN BEGIN
+        SendResult := GETLASTERRORTEXT;
+        IF SendResult = '' THEN
+          SendResult := UnknownErr;
+      END;
+      CLEAR(GraphMessage);
+      EXIT(SendResult = '');
+    END;
+
+    PROCEDURE IsEnabled@11() : Boolean;
+    VAR
+      SMTPMailSetup@1000 : Record 409;
+    BEGIN
+      IF NOT SMTPMailSetup.GET THEN
+        EXIT(FALSE);
+      EXIT(SMTPMailSetup."Mail Transport" = SMTPMailSetup."Mail Transport"::"Microsoft Graph");
+    END;
+
+    PROCEDURE GetBody@13() : Text;
+    BEGIN
+      IF ISNULL(GraphMessage) THEN
+        EXIT('');
+      EXIT(GraphMessage.GetBody);
+    END;
+
+    PROCEDURE AddAttachmentStream@15(AttachmentStream@1000 : InStream;AttachmentName@1001 : Text);
+    BEGIN
+      // The add-in copies the stream into memory immediately (System.IO.Stream parameter).
+      CheckMessageCreated;
+      GraphMessage.AddAttachmentStream(AttachmentStream,AttachmentName);
+    END;
+
+    PROCEDURE TestConnection@20() : Text;
+    VAR
+      Result@1000 : Text;
+    BEGIN
+      // Acquires an access token with the current setup (Mail Transport does not have to be Microsoft Graph yet).
+      // Returns '' on success, otherwise the error text.
+      CLEARLASTERROR;
+      IF NOT TryTestConnection(Result) THEN BEGIN
+        Result := GETLASTERRORTEXT;
+        IF Result = '' THEN
+          Result := UnknownErr;
+      END;
+      EXIT(Result);
+    END;
+
+    PROCEDURE ShowConnectionTest@21();
+    VAR
+      Result@1000 : Text;
+    BEGIN
+      // Used by the Page 409 action "Test Graph Connection".
+      Result := TestConnection;
+      IF Result <> '' THEN
+        ERROR(ConnectionFailedErr,Result);
+      MESSAGE(ConnectionOkMsg);
+    END;
+
+    PROCEDURE SendTestMail@22(ToAddress@1000 : Text);
+    VAR
+      SMTPMailSetup@1001 : Record 409;
+      FromAddress@1002 : Text;
+    BEGIN
+      // Sends a test mail through Microsoft Graph even when Mail Transport is still SMTP.
+      // Without a fixed Graph Sender Mailbox the recipient is also used as sender (like Codeunit 412).
+      IF ToAddress = '' THEN
+        ERROR(TestRecipientMissingErr);
+      SMTPMailSetup.GET;
+      FromAddress := SMTPMailSetup."Graph Sender Mailbox";
+      IF FromAddress = '' THEN
+        FromAddress := ToAddress;
+      CreateMessage(
+        '',FromAddress,ToAddress,TestMailSubjectTxt,
+        STRSUBSTNO(
+          TestMailBodyTxt,USERID,SERVICEINSTANCEID,
+          SMTPMailSetup."Graph Tenant ID",SMTPMailSetup."Graph Client ID",FORMAT(SMTPMailSetup."Graph Auth Method"),
+          FromAddress,FORMAT(SMTPMailSetup."Graph Cloud"),FORMAT(SMTPMailSetup."Graph Token Library"),GetAddInVersion),
+        TRUE);
+      Send;
+      IF GUIALLOWED THEN
+        MESSAGE(TestMailSentMsg,ToAddress);
+    END;
+
+    PROCEDURE SetClientSecret@23(VAR SMTPMailSetup@1000 : Record 409;Secret@1001 : Text);
+    VAR
+      ServicePassword@1002 : Record 1261;
+    BEGIN
+      // Same pattern as Table 1260 "Bank Data Conv. Service Setup".SavePassword: the secret lives in Table 1261
+      // "Service Password" (encrypted by Codeunit 1266 when an encryption key exists); Table 409 only keeps the key.
+      // The caller saves SMTPMailSetup (Page 409 does this as part of normal record handling).
+      IF Secret = '' THEN BEGIN
+        DeleteClientSecret(SMTPMailSetup);
+        EXIT;
+      END;
+      IF ISNULLGUID(SMTPMailSetup."Graph Secret Key") OR NOT ServicePassword.GET(SMTPMailSetup."Graph Secret Key") THEN BEGIN
+        ServicePassword.SavePassword(Secret);
+        ServicePassword.INSERT(TRUE);
+        SMTPMailSetup."Graph Secret Key" := ServicePassword.Key;
+      END ELSE BEGIN
+        ServicePassword.SavePassword(Secret);
+        ServicePassword.MODIFY;
+      END;
+      IF GUIALLOWED AND NOT ENCRYPTIONKEYEXISTS THEN
+        MESSAGE(SecretNotEncryptedMsg);
+    END;
+
+    PROCEDURE GetClientSecret@24(SMTPMailSetup@1000 : Record 409) : Text;
+    VAR
+      ServicePassword@1001 : Record 1261;
+    BEGIN
+      IF ISNULLGUID(SMTPMailSetup."Graph Secret Key") THEN
+        EXIT('');
+      IF NOT ServicePassword.GET(SMTPMailSetup."Graph Secret Key") THEN
+        EXIT('');
+      EXIT(ServicePassword.GetPassword);
+    END;
+
+    PROCEDURE HasClientSecret@25(SMTPMailSetup@1000 : Record 409) : Boolean;
+    VAR
+      ServicePassword@1001 : Record 1261;
+    BEGIN
+      IF ISNULLGUID(SMTPMailSetup."Graph Secret Key") THEN
+        EXIT(FALSE);
+      EXIT(ServicePassword.GET(SMTPMailSetup."Graph Secret Key"));
+    END;
+
+    PROCEDURE DeleteClientSecret@26(VAR SMTPMailSetup@1000 : Record 409);
+    VAR
+      ServicePassword@1001 : Record 1261;
+    BEGIN
+      IF NOT ISNULLGUID(SMTPMailSetup."Graph Secret Key") THEN
+        IF ServicePassword.GET(SMTPMailSetup."Graph Secret Key") THEN
+          ServicePassword.DELETE;
+      CLEAR(SMTPMailSetup."Graph Secret Key");
+    END;
+
+    PROCEDURE RaiseSMTPMessageNotSupported@27();
+    BEGIN
+      // Called by the patched Codeunit 400.GetSMTPMessage in Graph mode.
+      ERROR(SMTPMessageNotSupportedErr);
+    END;
+
+    PROCEDURE GetAddInVersion@28() : Text;
+    BEGIN
+      // Static property; returns the release number of NavMailGraph.dll (AssemblyVersion stays 1.0.0.0).
+      IF NOT CANLOADTYPE(GraphSender) THEN
+        EXIT('');
+      EXIT(GraphSender.Version);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryDoSend@30();
+    VAR
+      SMTPMailSetup@1000 : Record 409;
+    BEGIN
+      // Read-only on the database on purpose (try functions do not roll back writes).
+      CheckMessageCreated;
+      SMTPMailSetup.GET;
+      CreateSender(SMTPMailSetup);
+      SendResult := GraphSender.Send(GraphMessage);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryTestConnection@31(VAR Result@1000 : Text);
+    VAR
+      SMTPMailSetup@1001 : Record 409;
+    BEGIN
+      SMTPMailSetup.GET;
+      CreateSender(SMTPMailSetup);
+      Result := GraphSender.TestConnection;
+    END;
+
+    LOCAL PROCEDURE CreateSender@32(VAR SMTPMailSetup@1000 : Record 409);
+    BEGIN
+      // Maps the Table 409 Graph fields to NavMailGraph.GraphMailSender.
+      IF NOT CANLOADTYPE(GraphSender) THEN
+        ERROR(AddInMissingErr);
+      SMTPMailSetup.TESTFIELD("Graph Tenant ID");
+      SMTPMailSetup.TESTFIELD("Graph Client ID");
+
+      CLEAR(GraphSender);
+      GraphSender := GraphSender.GraphMailSender(SMTPMailSetup."Graph Tenant ID",SMTPMailSetup."Graph Client ID");
+
+      CASE SMTPMailSetup."Graph Auth Method" OF
+        SMTPMailSetup."Graph Auth Method"::"Client Secret":
+          BEGIN
+            IF NOT HasClientSecret(SMTPMailSetup) THEN
+              ERROR(SecretMissingErr);
+            GraphSender.UseClientSecret(GetClientSecret(SMTPMailSetup));
+          END;
+        SMTPMailSetup."Graph Auth Method"::Certificate:
+          BEGIN
+            SMTPMailSetup.TESTFIELD("Graph Cert. Thumbprint");
+            GraphSender.UseCertificateThumbprint(SMTPMailSetup."Graph Cert. Thumbprint");
+          END;
+      END;
+
+      CASE SMTPMailSetup."Graph Token Library" OF
+        SMTPMailSetup."Graph Token Library"::"Built-in":
+          GraphSender.TokenLibrary := 'BuiltIn';
+        SMTPMailSetup."Graph Token Library"::MSAL:
+          GraphSender.TokenLibrary := 'Msal';
+      END;
+
+      CASE SMTPMailSetup."Graph Cloud" OF
+        SMTPMailSetup."Graph Cloud"::"Global":
+          GraphSender.Cloud := 'Global';
+        SMTPMailSetup."Graph Cloud"::"US Government":
+          GraphSender.Cloud := 'USGov';
+        SMTPMailSetup."Graph Cloud"::"US Government DoD":
+          GraphSender.Cloud := 'USGovDoD';
+        SMTPMailSetup."Graph Cloud"::China:
+          GraphSender.Cloud := 'China';
+      END;
+
+      GraphSender.SenderMailbox := SMTPMailSetup."Graph Sender Mailbox";
+      GraphSender.SaveToSentItems := SMTPMailSetup."Graph Save to Sent Items";
+      GraphSender.UseDraftForLargeMessages := SMTPMailSetup."Graph Large Messages";
+      GraphSender.LogFilePath := SMTPMailSetup."Graph Log File Path";
+    END;
+
+    LOCAL PROCEDURE CheckMessageCreated@33();
+    BEGIN
+      IF ISNULL(GraphMessage) THEN
+        ERROR(NoMessageErr);
+    END;
+
+    BEGIN
+    {
+      nav2016-mailgraph - Codeunit 50400 "Graph Mail"
+      https://github.com/nolotz/nav2016-mailgraph (MIT License)
+
+      Sends NAV e-mail through Microsoft Graph sendMail (application permissions) using the server-side
+      add-in NavMailGraph.dll (AssemblyVersion 1.0.0.0, unsigned). Codeunit 400 "SMTP Mail" delegates to this
+      codeunit when Table 409 "SMTP Mail Setup"."Mail Transport" = Microsoft Graph (see nav/patches/COD400.md).
+
+      Public functions mirror Codeunit 400 (NAV 2016): CreateMessage, AddRecipients, AddCC, AddBCC, AppendBody,
+      AddAttachment, AddAttachmentStream, TrySend, Send, GetLastSendMailErrorText, GetBody.
+      Additional: IsEnabled, TestConnection, ShowConnectionTest, SendTestMail, SetClientSecret, GetClientSecret,
+      HasClientSecret, DeleteClientSecret, RaiseSMTPMessageNotSupported, GetAddInVersion.
+
+      Requires the Table 409 fields 50100..50112 from nav/patches/TAB409.md.
+      Not compiled in CI - compile and test in C/SIDE (NAV 2016) before use.
+
+      NMG1.00  initial version
+    }
+    END.
+  }
+}
+

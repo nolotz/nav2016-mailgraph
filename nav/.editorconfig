@@ -1,0 +1,5 @@
+# nav/objects/*.TXT are C/SIDE text objects stored in the OEM code page CP850 (see nav/README.md,
+# "Text file encoding"). EditorConfig has no CP850 charset value, so remove the repository-wide
+# "charset = utf-8" for them; otherwise an editor may re-save them as UTF-8 and garble the umlauts.
+[*.TXT]
+charset = unset

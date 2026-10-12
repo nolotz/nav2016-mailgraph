@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: 1
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore NavMailGraph.sln
+
+      - name: Build (net462 + netstandard2.0 + tooling)
+        run: dotnet build NavMailGraph.sln -c Release --no-restore
+
+      - name: Test (modern runtime)
+        run: dotnet test tests/NavMailGraph.Tests/NavMailGraph.Tests.csproj -c Release -f net8.0 --no-build --logger "trx;LogFileName=net8.trx" --results-directory TestResults
+
+      - name: Test (net462, real .NET Framework runtime)
+        if: runner.os == 'Windows'
+        run: dotnet test tests/NavMailGraph.Tests/NavMailGraph.Tests.csproj -c Release -f net462 --no-build --logger "trx;LogFileName=net462.trx" --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.os }}
+          path: TestResults/*.trx
+          if-no-files-found: ignore
+
+      - name: Package add-in (dist/Add-ins)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: ./build.sh --no-test
+
+      - name: Upload add-in artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: NavMailGraph-Addin
+          path: dist/
+
+  powershell-lint:
+    name: PowerShell script analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $results = Invoke-ScriptAnalyzer -Path deploy -Recurse -Severity Error,Warning -ExcludeRule PSAvoidUsingPlainTextForPassword,PSAvoidUsingConvertToSecureStringWithPlainText
+          $results | Format-Table -AutoSize
+          if ($results | Where-Object Severity -eq 'Error') { exit 1 }

@@ -1,0 +1,22 @@
+# .NET
+bin/
+obj/
+dist/
+*.user
+*.suo
+.vs/
+.idea/
+*.swp
+TestResults/
+coverage*/
+*.trx
+# macOS
+.DS_Store
+# secrets / local config (never commit)
+*.pfx
+*.p12
+*.snk
+.env
+.env.*
+appsettings.local.json
+nmg.local.json

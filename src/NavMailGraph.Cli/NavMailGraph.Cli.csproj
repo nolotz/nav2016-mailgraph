@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>$(ToolsTargetFramework)</TargetFramework>
+    <AssemblyName>nmg</AssemblyName>
+    <RootNamespace>NavMailGraph.Cli</RootNamespace>
+    <Description>Command-line test tool: send a mail through Microsoft Graph with the same library NAV uses.</Description>
+    <IsPackable>false</IsPackable>
+    <!-- Run on the newest installed runtime (8, 9, 10, ...): .NET 8 support ends 2026-11-10. -->
+    <RollForward>Major</RollForward>
+    <!-- CLI is tooling, not an add-in: its own version is free to float. -->
+    <AssemblyVersion>$(VersionPrefix).0</AssemblyVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../NavMailGraph/NavMailGraph.csproj" />
+    <ProjectReference Include="../NavMailGraph.Msal/NavMailGraph.Msal.csproj" />
+  </ItemGroup>
+
+</Project>
