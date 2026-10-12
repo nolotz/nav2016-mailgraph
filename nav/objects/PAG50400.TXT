@@ -1,0 +1,156 @@
+OBJECT Page 50400 Graph Mailbox Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    Editable=No;
+    CaptionML=[DEU=Graph-Postfacheinrichtung;
+               ENU=Graph Mailbox Setup];
+    SourceTable=Table50400;
+    PageType=List;
+    CardPageID=Graph Mailbox Card;
+    ActionList=ACTIONS
+    {
+      { 100     ;    ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 101     ;1   ;Action    ;
+                      Name=PollNow;
+                      CaptionML=[DEU=Jetzt abrufen;
+                                 ENU=Poll Now];
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Start;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 GraphMailboxPolling.PollMailboxWithMessage(Code);
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 102     ;1   ;Action    ;
+                      Name=TestConnection;
+                      CaptionML=[DEU=Verbindung testen;
+                                 ENU=Test Connection];
+                      Promoted=Yes;
+                      Image=ServiceSetup;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 GraphMailboxPolling.ShowConnectionTest(Rec);
+                               END;
+                                }
+      { 103     ;1   ;Action    ;
+                      Name=SchedulePolling;
+                      CaptionML=[DEU=Abruf planen;
+                                 ENU=Schedule Polling];
+                      Promoted=Yes;
+                      Image=CheckList;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 GraphMailboxPolling.SchedulePolling(Rec);
+                               END;
+                                }
+      { 104     ;1   ;Action    ;
+                      Name=ResetSyncState;
+                      CaptionML=[DEU=Synchronisierung zurÅcksetzen;
+                                 ENU=Reset Sync State];
+                      Image=ResetStatus;
+                      OnAction=BEGIN
+                                 GraphMailboxPolling.ResetSyncState(Rec);
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 110     ;    ;ActionContainer;
+                      ActionContainerType=RelatedInformation }
+      { 111     ;1   ;Action    ;
+                      Name=InboundMails;
+                      CaptionML=[DEU=Posteingang;
+                                 ENU=Inbound Mails];
+                      RunObject=Page 50401;
+                      RunPageLink=Mailbox Code=FIELD(Code);
+                      Promoted=Yes;
+                      Image=Email;
+                      PromotedCategory=Process }
+      { 112     ;1   ;Action    ;
+                      Name=StorageProfiles;
+                      CaptionML=[DEU=Objektspeicherprofile;
+                                 ENU=Object Storage Profiles];
+                      RunObject=Page 50404;
+                      Image=Setup }
+      { 113     ;1   ;Action    ;
+                      Name=JobQueueEntries;
+                      CaptionML=[DEU=Aufgabenwarteschlangenposten;
+                                 ENU=Job Queue Entries];
+                      RunObject=Page 672;
+                      Image=Log }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=Group;
+                GroupType=Repeater }
+
+    { 3   ;2   ;Field     ;
+                SourceExpr=Code }
+
+    { 4   ;2   ;Field     ;
+                SourceExpr=Description }
+
+    { 5   ;2   ;Field     ;
+                SourceExpr=Mailbox }
+
+    { 6   ;2   ;Field     ;
+                SourceExpr=Folder }
+
+    { 7   ;2   ;Field     ;
+                SourceExpr="After Import" }
+
+    { 8   ;2   ;Field     ;
+                SourceExpr="Polling Mode" }
+
+    { 9   ;2   ;Field     ;
+                SourceExpr="Attachment Storage" }
+
+    { 10  ;2   ;Field     ;
+                SourceExpr="Storage Profile Code";
+                Visible=FALSE }
+
+    { 11  ;2   ;Field     ;
+                SourceExpr=Enabled }
+
+    { 12  ;2   ;Field     ;
+                SourceExpr="Last Poll At" }
+
+    { 13  ;2   ;Field     ;
+                SourceExpr="Last Error" }
+
+    { 14  ;2   ;Field     ;
+                SourceExpr="Mails Imported" }
+
+    { 15  ;2   ;Field     ;
+                SourceExpr="Mails with Errors" }
+
+  }
+  CODE
+  {
+    VAR
+      GraphMailboxPolling@1000 : Codeunit 50401;
+
+    BEGIN
+    {
+      nav2016-mailgraph - Page 50400 "Graph Mailbox Setup" (list, card = Page 50405).
+      Actions call Codeunit 50401 "Graph Mailbox Polling".
+      Not compiled in CI - compile and test in C/SIDE (NAV 2016) before use.
+
+      NMG2.00  initial version
+    }
+    END.
+  }
+}

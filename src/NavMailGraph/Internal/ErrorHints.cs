@@ -125,6 +125,94 @@ namespace NavMailGraph.Internal
             return "";
         }
 
+        // ----------------------------------------------------------------------------------------------------------
+        // Reading mail (GraphMailbox, docs/DESIGN-v2.md section 5.1; permissions per docs/research-notes-v2.md)
+        // ----------------------------------------------------------------------------------------------------------
+
+        internal const string MailReadHint =
+            "Reading mail and attachments needs the Mail.Read application permission (Exchange RBAC role 'Application Mail.Read'): check that the mailbox "
+            + "is inside the scope of the role assignment (or that Mail.Read is granted with admin consent). Mail.ReadBasic is not enough (no body, no attachments). "
+            + "Permission changes can take 30 minutes to 2 hours to apply.";
+
+        internal const string MailReadWriteForMailboxHint =
+            "Marking as read, moving, deleting mail and creating folders needs the Mail.ReadWrite application permission (Exchange RBAC role "
+            + "'Application Mail.ReadWrite'): check that the mailbox is inside the scope of the role assignment (or that Mail.ReadWrite is granted with admin consent). "
+            + "Without it use the read-only mode (FetchChanges, no post-processing). Permission changes can take 30 minutes to 2 hours to apply.";
+
+        internal const string ReadMailboxNotFoundHint =
+            "The mailbox does not exist or has no Exchange Online mailbox/license: check the mailbox address.";
+
+        internal const string ReadNotFoundHint =
+            "The mailbox, folder, message or attachment was not found: check the mailbox address and the folder name/path, and whether the message was "
+            + "moved or deleted meanwhile (store the immutable ids returned by GraphMailbox; they are case-sensitive).";
+
+        internal const string InefficientFilterHint =
+            "Microsoft Graph rejected the $filter/$orderby combination: receivedDateTime must be the first $filter property when sorting by receivedDateTime.";
+
+        internal const string DeltaExpiredHint =
+            "The stored delta link has expired or is invalid: start a new sync with FetchChanges(\"\") and ReceivedAfter set to the last imported ReceivedText; "
+            + "already imported messages are skipped by the de-duplication on id / internetMessageId.";
+
+        /// <summary>Graph error codes that mean an expired or invalid delta token (docs/research-notes-v2.md).</summary>
+        internal static readonly string[] DeltaExpiredCodes = { "syncStateNotFound", "syncStateInvalid", "resyncRequired" };
+
+        /// <summary>True when <paramref name="errorCode"/> is one of <see cref="DeltaExpiredCodes"/> (case-insensitive).</summary>
+        internal static bool IsDeltaExpiredCode(string? errorCode)
+        {
+            foreach (string code in DeltaExpiredCodes)
+            {
+                if (string.Equals(code, (errorCode ?? "").Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Hint for errors of mailbox-reading operations. 403 / ErrorAccessDenied name the permission the operation needs
+        /// (<paramref name="requiresWrite"/>: Mail.ReadWrite for PATCH/move/delete/create folder, else Mail.Read); 404 and
+        /// ResourceNotFound point at mailbox/folder/message ids; InefficientFilter and delta-token codes get their own hint.
+        /// Everything else (AADSTS codes, 413, ...) falls back to <see cref="GetHint"/>.
+        /// </summary>
+        internal static string GetReadHint(string? errorCode, int statusCode, bool requiresWrite, string? message)
+        {
+            string code = (errorCode ?? "").Trim();
+            if (string.Equals(code, GraphMailException.ValidationCode, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(code, GraphMailException.TransportCode, StringComparison.OrdinalIgnoreCase))
+            {
+                return "";
+            }
+
+            if (statusCode == 403 || string.Equals(code, "ErrorAccessDenied", StringComparison.OrdinalIgnoreCase))
+            {
+                return requiresWrite ? MailReadWriteForMailboxHint : MailReadHint;
+            }
+
+            if (string.Equals(code, "MailboxNotEnabledForRESTAPI", StringComparison.OrdinalIgnoreCase))
+            {
+                return ReadMailboxNotFoundHint;
+            }
+
+            if (string.Equals(code, "InefficientFilter", StringComparison.OrdinalIgnoreCase))
+            {
+                return InefficientFilterHint;
+            }
+
+            if (IsDeltaExpiredCode(code) || statusCode == 410)
+            {
+                return DeltaExpiredHint;
+            }
+
+            if (statusCode == 404 || string.Equals(code, "ResourceNotFound", StringComparison.OrdinalIgnoreCase))
+            {
+                return ReadNotFoundHint;
+            }
+
+            return GetHint(code, statusCode, false, message);
+        }
+
         /// <summary>Appends " Hint: {hint}" to <paramref name="text"/> unless the hint is empty or already present.</summary>
         internal static string Append(string text, string hint)
         {

@@ -1,0 +1,325 @@
+OBJECT Codeunit 50403 Graph Inbound Mail Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+  }
+  CODE
+  {
+    VAR
+      GraphMailboxPolling@1000 : Codeunit 50401;
+      ObjectStorageMgt@1001 : Codeunit 50402;
+      FileManagement@1002 : Codeunit 419;
+      NoContentErr@1010 : TextConst 'DEU=FÅr den Anhang %1 ist kein Inhalt gespeichert (Status: %2).;ENU=No content is stored for attachment %1 (status: %2).';
+      NoStorageLinkErr@1011 : TextConst 'DEU=Der Anhang %1 liegt nicht im Objektspeicher. Ein Downloadlink ist nur fÅr AnhÑnge im Objektspeicher mîglich.;ENU=Attachment %1 is not in object storage. A download link is only available for attachments in object storage.';
+      EmlFailedErr@1012 : TextConst 'DEU=Die E-Mail konnte nicht als .eml exportiert werden: %1;ENU=The e-mail could not be exported as .eml: %1';
+      NoWebLinkErr@1013 : TextConst 'DEU=FÅr diese E-Mail ist kein Outlook-Weblink gespeichert.;ENU=No Outlook web link is stored for this e-mail.';
+      ReprocessQst@1014 : TextConst 'DEU=Mîchten Sie die E-Mail %1 erneut verarbeiten? Die Abonnenten des Ereignisses OnAfterImportMail werden erneut ausgefÅhrt.;ENU=Do you want to process e-mail %1 again? The subscribers of the event OnAfterImportMail run again.';
+      RequeueQst@1015 : TextConst 'DEU=Der Import der E-Mail %1 ist fehlgeschlagen. Mîchten Sie den NAV-Posten lîschen und die E-Mail beim nÑchsten Abruf erneut importieren? Die E-Mail wird dazu in den Ordner %2 zurÅckverschoben.;ENU=The import of e-mail %1 failed. Do you want to delete the NAV entry and import the e-mail again at the next poll? The e-mail is moved back to folder %2 for this.';
+      RequeuedMsg@1016 : TextConst 'DEU=Die E-Mail wird beim nÑchsten Abruf des Postfachs %1 erneut importiert.;ENU=The e-mail is imported again at the next poll of mailbox %1.';
+      ReprocessOkMsg@1017 : TextConst 'DEU=Die E-Mail %1 wurde erneut verarbeitet.;ENU=E-mail %1 was processed again.';
+      ReprocessFailedErr@1018 : TextConst 'DEU=Die erneute Verarbeitung der E-Mail %1 ist fehlgeschlagen: %2;ENU=Processing e-mail %1 again failed: %2';
+      MoveBackFailedErr@1019 : TextConst 'DEU=Die E-Mail konnte nicht in den Ordner %1 zurÅckverschoben werden: %2;ENU=The e-mail could not be moved back to folder %1: %2';
+      MailboxActionFailedMsg@1020 : TextConst 'DEU=Die E-Mail wurde verarbeitet, aber die Aktion im Postfach ist fehlgeschlagen: %1;ENU=The e-mail was processed, but the action in the mailbox failed: %1';
+
+    PROCEDURE OpenAttachment@1(VAR InboundAttachment@1000 : Record 50402);
+    VAR
+      TempBlob@1001 : TEMPORARY Record 99008535;
+    BEGIN
+      // Downloads the attachment to the client (Windows and Web client), wherever its content is stored.
+      IF InboundAttachment."Storage Location" = InboundAttachment."Storage Location"::"Object Storage" THEN BEGIN
+        ObjectStorageMgt.DownloadToClient(
+          InboundAttachment."Storage Profile Code",InboundAttachment."Object Key",InboundAttachment."File Name");
+        EXIT;
+      END;
+      GetAttachmentContent(InboundAttachment,TempBlob);
+      FileManagement.BLOBExport(TempBlob,InboundAttachment."File Name",TRUE);
+    END;
+
+    PROCEDURE GetAttachmentContent@2(VAR InboundAttachment@1000 : Record 50402;VAR TempBlob@1001 : Record 99008535);
+    BEGIN
+      // For subscribers: the content in TempBlob.Blob, independent of BLOB / object storage / server folder.
+      // Use a TEMPORARY TempBlob. Raises an error when no content is stored (link, too large, ...).
+      CLEAR(TempBlob.Blob);
+      CASE InboundAttachment."Storage Location" OF
+        InboundAttachment."Storage Location"::"Database (BLOB)":
+          BEGIN
+            InboundAttachment.CALCFIELDS(Content);
+            IF NOT InboundAttachment.Content.HASVALUE THEN
+              ERROR(NoContentErr,InboundAttachment."File Name",FORMAT(InboundAttachment.Status));
+            TempBlob.Blob := InboundAttachment.Content;
+          END;
+        InboundAttachment."Storage Location"::"Object Storage":
+          ObjectStorageMgt.DownloadToBlob(InboundAttachment."Storage Profile Code",InboundAttachment."Object Key",TempBlob);
+        InboundAttachment."Storage Location"::"Server Folder":
+          FileManagement.BLOBImportFromServerFile(TempBlob,InboundAttachment."Server File Path");
+        ELSE
+          ERROR(NoContentErr,InboundAttachment."File Name",FORMAT(InboundAttachment.Status));
+      END;
+    END;
+
+    PROCEDURE SaveAttachmentToServerFile@3(VAR InboundAttachment@1000 : Record 50402;FilePath@1001 : Text);
+    VAR
+      TempBlob@1002 : TEMPORARY Record 99008535;
+    BEGIN
+      // For subscribers that need a file on the NAV Server (e.g. for Codeunit 400 attachments or OCR).
+      IF InboundAttachment."Storage Location" = InboundAttachment."Storage Location"::"Object Storage" THEN BEGIN
+        ObjectStorageMgt.DownloadToFile(InboundAttachment."Storage Profile Code",InboundAttachment."Object Key",FilePath);
+        EXIT;
+      END;
+      GetAttachmentContent(InboundAttachment,TempBlob);
+      FileManagement.BLOBExportToServerFile(TempBlob,FilePath);
+    END;
+
+    PROCEDURE GetAttachmentDownloadUrl@4(VAR InboundAttachment@1000 : Record 50402;ValidMinutes@1001 : Integer) : Text;
+    VAR
+      StorageProfile@1002 : Record 50403;
+    BEGIN
+      // Time-limited link (S3 pre-signed URL / Azure SAS) for attachments in object storage.
+      IF InboundAttachment."Storage Location" <> InboundAttachment."Storage Location"::"Object Storage" THEN
+        ERROR(NoStorageLinkErr,InboundAttachment."File Name");
+      IF ValidMinutes <= 0 THEN BEGIN
+        StorageProfile.GET(InboundAttachment."Storage Profile Code");
+        ValidMinutes := StorageProfile."Download Link Validity (Min.)";
+      END;
+      EXIT(ObjectStorageMgt.GetDownloadUrl(InboundAttachment."Storage Profile Code",InboundAttachment."Object Key",ValidMinutes));
+    END;
+
+    PROCEDURE OpenAttachmentDownloadUrl@5(VAR InboundAttachment@1000 : Record 50402);
+    BEGIN
+      HYPERLINK(GetAttachmentDownloadUrl(InboundAttachment,0));
+    END;
+
+    PROCEDURE ExportEml@6(VAR InboundMail@1000 : Record 50401);
+    VAR
+      MailboxSetup@1001 : Record 50400;
+      TempBlob@1002 : TEMPORARY Record 99008535;
+      GraphMailbox@1003 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";
+      ServerFile@1004 : Text;
+      Result@1005 : Text;
+    BEGIN
+      // Downloads the original MIME message (.eml) from the mailbox (GET /messages/{id}/$value).
+      // Works while the e-mail still exists in the mailbox (also after a move; ids are immutable).
+      MailboxSetup.GET(InboundMail."Mailbox Code");
+      GraphMailboxPolling.CreateGraphMailbox(MailboxSetup,GraphMailbox);
+      ServerFile := FileManagement.ServerTempFileName('eml');
+      Result := GraphMailbox.SaveMimeToFile(InboundMail."Graph Message ID",ServerFile);
+      IF Result <> '' THEN BEGIN
+        IF FileManagement.DeleteServerFile(ServerFile) THEN;
+        ERROR(EmlFailedErr,Result);
+      END;
+      FileManagement.BLOBImportFromServerFile(TempBlob,ServerFile);
+      IF FileManagement.DeleteServerFile(ServerFile) THEN;
+      FileManagement.BLOBExport(TempBlob,GetSafeFileName(InboundMail) + '.eml',TRUE);
+    END;
+
+    PROCEDURE ShowBody@7(VAR InboundMail@1000 : Record 50401);
+    VAR
+      InboundMail2@1001 : Record 50401;
+    BEGIN
+      InboundMail2 := InboundMail;
+      InboundMail2.SETRECFILTER;
+      PAGE.RUNMODAL(PAGE::"Graph Inbound Mail Body",InboundMail2);
+    END;
+
+    PROCEDURE DownloadBody@8(VAR InboundMail@1000 : Record 50401);
+    VAR
+      TempBlob@1001 : TEMPORARY Record 99008535;
+    BEGIN
+      // The body as stored (UTF-8), as .html or .txt file.
+      InboundMail.CALCFIELDS(Body);
+      TempBlob.Blob := InboundMail.Body;
+      IF InboundMail."Body Is HTML" THEN
+        FileManagement.BLOBExport(TempBlob,GetSafeFileName(InboundMail) + '.html',TRUE)
+      ELSE
+        FileManagement.BLOBExport(TempBlob,GetSafeFileName(InboundMail) + '.txt',TRUE);
+    END;
+
+    PROCEDURE GetBodyText@9(VAR InboundMail@1000 : Record 50401) : Text;
+    VAR
+      InStr@1001 : InStream;
+      Line@1002 : Text;
+      Content@1003 : Text;
+      CRLF@1004 : Text[2];
+    BEGIN
+      // The body as stored (HTML or plain text).
+      InboundMail.CALCFIELDS(Body);
+      IF NOT InboundMail.Body.HASVALUE THEN
+        EXIT('');
+      CRLF[1] := 13;
+      CRLF[2] := 10;
+      InboundMail.Body.CREATEINSTREAM(InStr,TEXTENCODING::UTF8);
+      InStr.READTEXT(Content);
+      WHILE NOT InStr.EOS DO BEGIN
+        InStr.READTEXT(Line);
+        Content += CRLF + Line;
+      END;
+      EXIT(Content);
+    END;
+
+    PROCEDURE GetBodyPlainText@10(VAR InboundMail@1000 : Record 50401) : Text;
+    BEGIN
+      // The body as plain text (simple HTML-to-text conversion for display and for subscribers).
+      IF InboundMail."Body Is HTML" THEN
+        EXIT(HtmlToText(GetBodyText(InboundMail)));
+      EXIT(GetBodyText(InboundMail));
+    END;
+
+    PROCEDURE GetWebLink@11(VAR InboundMail@1000 : Record 50401) : Text;
+    VAR
+      InStr@1001 : InStream;
+      Part@1002 : Text;
+      WebLink@1003 : Text;
+    BEGIN
+      InboundMail.CALCFIELDS("Web Link");
+      IF NOT InboundMail."Web Link".HASVALUE THEN
+        EXIT('');
+      InboundMail."Web Link".CREATEINSTREAM(InStr);
+      WHILE NOT InStr.EOS DO BEGIN
+        InStr.READTEXT(Part);
+        WebLink += Part;
+      END;
+      EXIT(WebLink);
+    END;
+
+    PROCEDURE OpenInOutlook@12(VAR InboundMail@1000 : Record 50401);
+    VAR
+      WebLink@1001 : Text;
+    BEGIN
+      WebLink := GetWebLink(InboundMail);
+      IF WebLink = '' THEN
+        ERROR(NoWebLinkErr);
+      HYPERLINK(WebLink);
+    END;
+
+    PROCEDURE MarkProcessed@13(VAR InboundMail@1000 : Record 50401);
+    BEGIN
+      InboundMail.Status := InboundMail.Status::Processed;
+      InboundMail."Processed At" := CURRENTDATETIME;
+      InboundMail."Error Text" := '';
+      InboundMail.MODIFY;
+    END;
+
+    PROCEDURE Reprocess@14(VAR InboundMail@1000 : Record 50401);
+    VAR
+      MailboxSetup@1001 : Record 50400;
+      GraphMailbox@1002 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";
+    BEGIN
+      // Import failed: the NAV entry has no attachments, so the e-mail is queued for a new import.
+      // Otherwise: OnAfterImportMail runs again; on success the mailbox action of the setup is applied
+      // again (e.g. move from the error folder to the processed folder).
+      IF InboundMail."Import Failed" THEN BEGIN
+        RequeueForImport(InboundMail);
+        EXIT;
+      END;
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(ReprocessQst,TRUE,InboundMail."Entry No.") THEN
+          EXIT;
+
+      InboundMail.Status := InboundMail.Status::Imported;
+      InboundMail."Error Text" := '';
+      InboundMail.MODIFY;
+      IF NOT GraphMailboxPolling.RunSubscribers(InboundMail) THEN
+        ERROR(ReprocessFailedErr,InboundMail."Entry No.",InboundMail."Error Text");
+
+      MailboxSetup.GET(InboundMail."Mailbox Code");
+      IF MailboxSetup."After Import" <> MailboxSetup."After Import"::Nothing THEN BEGIN
+        GraphMailboxPolling.CreateGraphMailbox(MailboxSetup,GraphMailbox);
+        IF NOT GraphMailboxPolling.ApplyMailboxAction(MailboxSetup,GraphMailbox,InboundMail,'') THEN BEGIN
+          COMMIT;
+          IF GUIALLOWED THEN
+            MESSAGE(MailboxActionFailedMsg,InboundMail."Mailbox Action Error");
+          EXIT;
+        END;
+        COMMIT;
+      END;
+      IF GUIALLOWED THEN
+        MESSAGE(ReprocessOkMsg,InboundMail."Entry No.");
+    END;
+
+    PROCEDURE HtmlToText@15(Html@1000 : Text) : Text;
+    VAR
+      Regex@1001 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      WebUtility@1002 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.WebUtility";
+      Result@1003 : Text;
+      CRLF@1004 : Text[2];
+    BEGIN
+      // Simple conversion for display: drops head/style/script, turns line breaks and block ends into new lines.
+      IF Html = '' THEN
+        EXIT('');
+      CRLF[1] := 13;
+      CRLF[2] := 10;
+      Result := Regex.Replace(Html,'(?is)<(head|style|script)[^>]*>.*?</\1\s*>','');
+      Result := Regex.Replace(Result,'(?i)<br\s*/?>',CRLF);
+      Result := Regex.Replace(Result,'(?i)</(p|div|tr|li|h[1-6]|table)\s*>',CRLF);
+      Result := Regex.Replace(Result,'<[^>]+>','');
+      Result := WebUtility.HtmlDecode(Result);
+      Result := Regex.Replace(Result,'[ \t]+\r?\n',CRLF);
+      Result := Regex.Replace(Result,'(\r?\n){3,}',CRLF + CRLF);
+      EXIT(Result);
+    END;
+
+    LOCAL PROCEDURE RequeueForImport@20(VAR InboundMail@1000 : Record 50401);
+    VAR
+      MailboxSetup@1001 : Record 50400;
+      GraphMailbox@1002 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";
+      SourceFolder@1003 : Text;
+      Result@1004 : Text;
+    BEGIN
+      // Moves the e-mail back to the source folder (if it was moved), lowers the watermark to its receive time
+      // (delta mode: restarts the delta sync) and deletes the NAV entry. The next poll imports it again.
+      MailboxSetup.GET(InboundMail."Mailbox Code");
+      SourceFolder := GraphMailboxPolling.GetSourceFolder(MailboxSetup);
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(RequeueQst,FALSE,InboundMail."Entry No.",SourceFolder) THEN
+          EXIT;
+      IF InboundMail."Mailbox Action" = InboundMail."Mailbox Action"::Moved THEN BEGIN
+        GraphMailboxPolling.CreateGraphMailbox(MailboxSetup,GraphMailbox);
+        Result := GraphMailbox.MoveToFolder(InboundMail."Graph Message ID",SourceFolder);
+        IF Result <> '' THEN
+          ERROR(MoveBackFailedErr,SourceFolder,Result);
+      END;
+      GraphMailboxPolling.LowerWatermark(MailboxSetup.Code,InboundMail."Received (Text)");
+      IF MailboxSetup."Polling Mode" = MailboxSetup."Polling Mode"::"Delta Query" THEN
+        GraphMailboxPolling.SetDeltaLink(MailboxSetup.Code,'');
+      InboundMail.DELETE(TRUE);
+      COMMIT;
+      IF GUIALLOWED THEN
+        MESSAGE(RequeuedMsg,MailboxSetup.Code);
+    END;
+
+    LOCAL PROCEDURE GetSafeFileName@21(VAR InboundMail@1000 : Record 50401) : Text;
+    VAR
+      FileName@1001 : Text;
+    BEGIN
+      FileName := FileManagement.StripNotsupportChrInFileName(COPYSTR(InboundMail.Subject,1,80));
+      FileName := DELCHR(FileName,'<>',' .');
+      IF FileName = '' THEN
+        FileName := 'mail';
+      EXIT(FORMAT(InboundMail."Entry No.",0,9) + ' ' + FileName);
+    END;
+
+    BEGIN
+    {
+      nav2016-mailgraph - Codeunit 50403 "Graph Inbound Mail Mgt."
+      https://github.com/nolotz/nav2016-mailgraph (MIT License)
+
+      UI and subscriber helpers for Tables 50401/50402:
+        OpenAttachment, GetAttachmentContent(VAR TempBlob), SaveAttachmentToServerFile, GetAttachmentDownloadUrl,
+        OpenAttachmentDownloadUrl - the caller does not need to know whether the content is in the BLOB,
+        in object storage or in a server folder.
+        ExportEml (original MIME from the mailbox), ShowBody, DownloadBody, GetBodyText, GetBodyPlainText,
+        GetWebLink, OpenInOutlook, MarkProcessed, Reprocess, HtmlToText.
+
+      Not compiled in CI - compile and test in C/SIDE (NAV 2016) before use.
+
+      NMG2.00  initial version
+    }
+    END.
+  }
+}

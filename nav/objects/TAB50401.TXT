@@ -1,0 +1,137 @@
+OBJECT Table 50401 Graph Inbound Mail
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    OnDelete=VAR
+               InboundAttachment@1000 : Record 50402;
+             BEGIN
+               InboundAttachment.SETRANGE("Mail Entry No.","Entry No.");
+               IF NOT InboundAttachment.ISEMPTY THEN
+                 InboundAttachment.DELETEALL(TRUE);
+             END;
+
+    CaptionML=[DEU=Graph-Posteingang;
+               ENU=Graph Inbound Mail];
+    LookupPageID=Page50401;
+    DrillDownPageID=Page50401;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Entry No.           ;Integer       ;AutoIncrement=Yes;
+                                                   CaptionML=[DEU=Lfd. Nr.;
+                                                              ENU=Entry No.] }
+    { 2   ;   ;Mailbox Code        ;Code20        ;TableRelation="Graph Mailbox Setup";
+                                                   CaptionML=[DEU=Postfachcode;
+                                                              ENU=Mailbox Code] }
+    { 3   ;   ;Graph Message ID    ;Text250       ;CaptionML=[DEU=Graph-Nachrichten-ID;
+                                                              ENU=Graph Message ID] }
+    { 4   ;   ;Internet Message ID ;Text250       ;CaptionML=[DEU=Internet-Nachrichten-ID;
+                                                              ENU=Internet Message ID] }
+    { 5   ;   ;Conversation ID     ;Text250       ;CaptionML=[DEU=Unterhaltungs-ID;
+                                                              ENU=Conversation ID] }
+    { 6   ;   ;Subject             ;Text250       ;CaptionML=[DEU=Betreff;
+                                                              ENU=Subject] }
+    { 7   ;   ;From Address        ;Text250       ;CaptionML=[DEU=Absenderadresse;
+                                                              ENU=From Address] }
+    { 8   ;   ;From Name           ;Text250       ;CaptionML=[DEU=Absendername;
+                                                              ENU=From Name] }
+    { 9   ;   ;Sender Address      ;Text250       ;CaptionML=[DEU=Senderadresse;
+                                                              ENU=Sender Address] }
+    { 10  ;   ;To Recipients       ;Text250       ;CaptionML=[DEU=An;
+                                                              ENU=To Recipients] }
+    { 11  ;   ;Cc Recipients       ;Text250       ;CaptionML=[DEU=Cc;
+                                                              ENU=Cc Recipients] }
+    { 12  ;   ;Reply-To            ;Text250       ;CaptionML=[DEU=Antwort an;
+                                                              ENU=Reply-To] }
+    { 13  ;   ;Received At         ;DateTime      ;CaptionML=[DEU=Empfangen am;
+                                                              ENU=Received At] }
+    { 14  ;   ;Received (Text)     ;Text50        ;CaptionML=[DEU=Empfangen (Text);
+                                                              ENU=Received (Text)] }
+    { 15  ;   ;Sent At             ;DateTime      ;CaptionML=[DEU=Gesendet am;
+                                                              ENU=Sent At] }
+    { 16  ;   ;Importance          ;Text20        ;CaptionML=[DEU=Wichtigkeit;
+                                                              ENU=Importance] }
+    { 17  ;   ;Is Read             ;Boolean       ;CaptionML=[DEU=Gelesen;
+                                                              ENU=Is Read] }
+    { 18  ;   ;Has Attachments     ;Boolean       ;CaptionML=[DEU=Hat AnhÑnge;
+                                                              ENU=Has Attachments] }
+    { 19  ;   ;Body                ;BLOB          ;CaptionML=[DEU=Text;
+                                                              ENU=Body] }
+    { 20  ;   ;Body Is HTML        ;Boolean       ;CaptionML=[DEU=Text ist HTML;
+                                                              ENU=Body Is HTML] }
+    { 21  ;   ;Body Preview        ;Text250       ;CaptionML=[DEU=Textvorschau;
+                                                              ENU=Body Preview] }
+    { 22  ;   ;Web Link            ;BLOB          ;CaptionML=[DEU=Weblink;
+                                                              ENU=Web Link] }
+    { 30  ;   ;Status              ;Option        ;CaptionML=[DEU=Status;
+                                                              ENU=Status];
+                                                   OptionCaptionML=[DEU=Importiert,Verarbeitet,Fehler;
+                                                                    ENU=Imported,Processed,Error];
+                                                   OptionString=Imported,Processed,Error }
+    { 31  ;   ;Error Text          ;Text250       ;CaptionML=[DEU=Fehlertext;
+                                                              ENU=Error Text] }
+    { 32  ;   ;Import Failed       ;Boolean       ;CaptionML=[DEU=Import fehlgeschlagen;
+                                                              ENU=Import Failed] }
+    { 33  ;   ;Imported At         ;DateTime      ;CaptionML=[DEU=Importiert am;
+                                                              ENU=Imported At] }
+    { 34  ;   ;Imported By         ;Code50        ;CaptionML=[DEU=Importiert von;
+                                                              ENU=Imported By] }
+    { 35  ;   ;Processed At        ;DateTime      ;CaptionML=[DEU=Verarbeitet am;
+                                                              ENU=Processed At] }
+    { 36  ;   ;Mailbox Action      ;Option        ;CaptionML=[DEU=Aktion im Postfach;
+                                                              ENU=Mailbox Action];
+                                                   OptionCaptionML=[DEU=" ,Verschoben,Als gelesen markiert,Gelîscht,Belassen,Fehlgeschlagen";
+                                                                    ENU=" ,Moved,Marked as Read,Deleted,Kept,Failed"];
+                                                   OptionString=[ ,Moved,Marked as Read,Deleted,Kept,Failed] }
+    { 37  ;   ;Mailbox Action Error;Text250       ;CaptionML=[DEU=Fehler der Postfachaktion;
+                                                              ENU=Mailbox Action Error] }
+    { 38  ;   ;Current Folder      ;Text250       ;CaptionML=[DEU=Aktueller Ordner;
+                                                              ENU=Current Folder] }
+    { 39  ;   ;Related Record ID   ;RecordID      ;CaptionML=[DEU=VerknÅpfte Datensatz-ID;
+                                                              ENU=Related Record ID] }
+    { 40  ;   ;No. of Attachments  ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Graph Inbound Attachment" WHERE (Mail Entry No.=FIELD(Entry No.)));
+                                                   CaptionML=[DEU=Anzahl AnhÑnge;
+                                                              ENU=No. of Attachments];
+                                                   Editable=No }
+    { 41  ;   ;Subscribers Run     ;Boolean       ;CaptionML=[DEU=Abonnenten ausgefÅhrt;
+                                                              ENU=Subscribers Run];
+                                                   Editable=No }
+    { 42  ;   ;Mailbox Action Attempts;Integer    ;CaptionML=[DEU=Versuche Postfachaktion;
+                                                              ENU=Mailbox Action Attempts];
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Entry No.                               ;Clustered=Yes }
+    {    ;Mailbox Code,Graph Message ID            }
+    {    ;Mailbox Code,Internet Message ID         }
+    {    ;Mailbox Code,Mailbox Action              }
+    {    ;Status,Received At                       }
+    {    ;Received At                              }
+  }
+  FIELDGROUPS
+  {
+    { 1   ;DropDown            ;Entry No.,Received At,From Address,Subject}
+  }
+  CODE
+  {
+    BEGIN
+    {
+      nav2016-mailgraph - Table 50401 "Graph Inbound Mail" (one record per imported e-mail).
+      Graph ids are case-sensitive; they are stored in Text fields (never Code). Duplicate check:
+      Mailbox Code + Graph Message ID, then Mailbox Code + Internet Message ID (Codeunit 50401).
+      Deleting a record deletes its attachment records; objects in object storage or server files are kept.
+      "Subscribers Run" = OnAfterImportMail was raised (set in the same transaction as the changes of the subscribers), so
+      a run that stopped between import and subscribers raises it on the next poll. "Mailbox Action Attempts" counts
+      failed mailbox actions in a row; the next polls retry a failed action until the limit of Codeunit 50401.
+    }
+    END.
+  }
+}

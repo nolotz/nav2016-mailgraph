@@ -1,0 +1,128 @@
+OBJECT Page 50406 Graph Inbound Attachments
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    Editable=No;
+    CaptionML=[DEU=Graph-Posteingang Anh„nge;
+               ENU=Graph Inbound Attachments];
+    SourceTable=Table50402;
+    SourceTableView=SORTING(Entry No.)
+                    ORDER(Descending);
+    PageType=List;
+    ActionList=ACTIONS
+    {
+      { 100     ;    ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 101     ;1   ;Action    ;
+                      Name=OpenAttachment;
+                      CaptionML=[DEU=Anhang ”ffnen;
+                                 ENU=Open Attachment];
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=ExportAttachment;
+                      PromotedCategory=Process;
+                      Scope=Repeater;
+                      OnAction=BEGIN
+                                 InboundMailMgt.OpenAttachment(Rec);
+                               END;
+                                }
+      { 102     ;1   ;Action    ;
+                      Name=OpenDownloadLink;
+                      CaptionML=[DEU=Downloadlink ”ffnen;
+                                 ENU=Open Download Link];
+                      Image=Navigate;
+                      Scope=Repeater;
+                      OnAction=BEGIN
+                                 InboundMailMgt.OpenAttachmentDownloadUrl(Rec);
+                               END;
+                                }
+      { 110     ;    ;ActionContainer;
+                      ActionContainerType=RelatedInformation }
+      { 111     ;1   ;Action    ;
+                      Name=ShowMail;
+                      CaptionML=[DEU=E-Mail anzeigen;
+                                 ENU=Show E-Mail];
+                      RunObject=Page 50402;
+                      RunPageLink=Entry No.=FIELD(Mail Entry No.);
+                      Promoted=Yes;
+                      Image=Email;
+                      PromotedCategory=Process }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=Group;
+                GroupType=Repeater }
+
+    { 3   ;2   ;Field     ;
+                SourceExpr="Mail Entry No." }
+
+    { 4   ;2   ;Field     ;
+                SourceExpr="Mailbox Code" }
+
+    { 5   ;2   ;Field     ;
+                SourceExpr="File Name";
+                OnDrillDown=BEGIN
+                              InboundMailMgt.OpenAttachment(Rec);
+                            END;
+                             }
+
+    { 6   ;2   ;Field     ;
+                SourceExpr=Size }
+
+    { 7   ;2   ;Field     ;
+                SourceExpr="Content Type";
+                Visible=FALSE }
+
+    { 8   ;2   ;Field     ;
+                SourceExpr=Kind;
+                Visible=FALSE }
+
+    { 9   ;2   ;Field     ;
+                SourceExpr="Is Inline";
+                Visible=FALSE }
+
+    { 10  ;2   ;Field     ;
+                SourceExpr="Storage Location" }
+
+    { 11  ;2   ;Field     ;
+                SourceExpr=Status }
+
+    { 12  ;2   ;Field     ;
+                SourceExpr="Storage Profile Code";
+                Visible=FALSE }
+
+    { 13  ;2   ;Field     ;
+                SourceExpr="Object Key";
+                Visible=FALSE }
+
+    { 14  ;2   ;Field     ;
+                SourceExpr="Server File Path";
+                Visible=FALSE }
+
+  }
+  CODE
+  {
+    VAR
+      InboundMailMgt@1000 : Codeunit 50403;
+
+    BEGIN
+    {
+      nav2016-mailgraph - Page 50406 "Graph Inbound Attachments" (list of all attachments).
+      Not compiled in CI - compile and test in C/SIDE (NAV 2016) before use.
+
+      NMG2.00  initial version
+    }
+    END.
+  }
+}

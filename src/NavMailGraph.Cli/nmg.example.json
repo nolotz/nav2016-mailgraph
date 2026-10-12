@@ -1,5 +1,5 @@
 {
-  "_comment": "Example config for nmg. Copy to nmg.local.json (git-ignored) or pass --config PATH. Keys = long options without '--'; command-line values override this file. Never put real secrets here; use secret-env / cert-password-env.",
+  "_comment": "Example config for nmg. Copy to nmg.local.json (git-ignored) or pass --config PATH. Keys = long options without '--'; command-line values override this file; keys that do not apply to a command are ignored. Never put real secrets here; use secret-env / cert-password-env / account-key-env / sas-url-env / secret-key-env.",
   "tenant": "contoso.onmicrosoft.com",
   "client": "00000000-0000-0000-0000-000000000000",
   "secret-env": "NMG_CLIENT_SECRET",
@@ -11,6 +11,8 @@
   "send-x5c": false,
   "log": "",
   "verbose": false,
+
+  "_comment_send": "nmg send. 'mailbox' is also the mailbox that nmg inbox reads.",
   "from": "NAV <nav@contoso.com>",
   "mailbox": "",
   "to": ["you@contoso.com"],
@@ -18,5 +20,22 @@
   "body": "Hello from nmg.",
   "html": false,
   "attach": [],
-  "no-draft": false
+  "no-draft": false,
+  "_comment_link": "Large attachments as download links (uses the storage settings below): \"link-storage\": true, \"link-threshold-mb\": 20, \"link-days\": 7, \"link-text\": \"Download {0} ({1}, until {2})\"",
+
+  "_comment_inbox": "nmg inbox: folder = well-known name, folder id or path like Inbox/NAV/Invoices; since = ISO 8601 UTC, e.g. 2026-10-01T00:00:00Z",
+  "folder": "inbox",
+  "max": 50,
+  "link-file": "",
+
+  "_comment_storage": "nmg storage (and send with link-storage / attach-storage). provider: azure-key | azure-sas | azure-entra | s3.",
+  "provider": "azure-key",
+  "account": "navfiles",
+  "account-key-env": "NMG_STORAGE_KEY",
+  "container": "nav",
+  "_comment_storage_other": "azure-sas: \"sas-url-env\": \"NMG_SAS_URL\".  azure-entra: account + container, credential from the auth keys above.  s3: \"endpoint\": \"https://s3.eu-central-1.amazonaws.com\", \"region\": \"eu-central-1\", \"bucket\": \"nav-files\", \"access-key\": \"AKIA...\", \"secret-key-env\": \"NMG_S3_SECRET\", \"path-style\": \"auto\" (or \"on\" / \"off\").  Azurite: \"endpoint\": \"http://127.0.0.1:10000/devstoreaccount1\".",
+  "prefix": "",
+  "threshold-mb": 64,
+  "part-mb": 8,
+  "storage-timeout": 300
 }

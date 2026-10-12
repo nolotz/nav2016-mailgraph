@@ -10,6 +10,8 @@ brew install --cask dotnet-sdk@8   # .NET SDK 8 incl. the .NET 8 runtime (tools/
 brew install --cask powershell     # pwsh, for the deploy scripts and Exchange/Graph modules
 ```
 
+Optional: a Docker engine with `docker compose` (e.g. Docker Desktop), only for the storage integration tests.
+
 * No Mono, no Windows, no Visual Studio. The `net462` target compiles against the reference assemblies from the
   NuGet package `Microsoft.NETFramework.ReferenceAssemblies`, which the SDK restores automatically.
 * ExchangeOnlineManagement 3.10.x needs PowerShell 7.6+ (macOS 14 or later). On macOS 13 use module 3.9.2.
@@ -27,7 +29,8 @@ brew install --cask powershell     # pwsh, for the deploy scripts and Exchange/G
 | `src/NavMailGraph/` | core add-in, `net462;netstandard2.0`, no NuGet dependencies |
 | `src/NavMailGraph.Msal/` | optional MSAL token provider (`Microsoft.Identity.Client` 4.90.1) |
 | `src/NavMailGraph.Cli/` | `nmg` console tool (net8.0) |
-| `tests/NavMailGraph.Tests/` | xunit tests: net8.0 everywhere, additionally net462 on Windows |
+| `tests/NavMailGraph.Tests/` | xunit tests: net8.0 everywhere, additionally net462 on Windows (`Reading/`, `Storage/`, `Integration/` for v0.2) |
+| `tests/integration/` | Docker Compose file and runner for the storage emulators (Azurite, SeaweedFS) |
 | `nav/` | C/AL objects and patches ([../nav/README.md](../nav/README.md)) |
 | `deploy/` | PowerShell scripts ([../deploy/README.md](../deploy/README.md)) |
 | `Directory.Build.props` | version, AssemblyVersion pin, target frameworks |
@@ -61,7 +64,42 @@ the same parameter count), `AssemblyVersion` stays `1.0.0.0`.
 dotnet test tests/NavMailGraph.Tests/NavMailGraph.Tests.csproj -f net8.0
 ```
 
-The unit tests use a fake HTTP handler; they need no tenant and no network.
+The unit tests use a fake HTTP handler; they need no tenant and no network. This includes the v0.2 Graph reading
+code (fake Graph responses for list, delta, move, folders, `$value` streams, 405/410 errors), the SigV4 signer
+(AWS's published test vectors), the Azure Shared Key/SAS signing, link storage and the Graph → storage pipe. Tests
+in the category `Integration` are reported as skipped unless `NMG_INTEGRATION=1` is set.
+
+## Integration tests with Docker (object storage)
+
+`ObjectStorageClient` is also tested end-to-end against local emulators: **Azurite 3.37.0** (Azure Blob, Shared Key
+and SAS) and **SeaweedFS 4.48** (S3, SigV4, multipart, presigned GET). The `minio/minio` image is not used because it
+was not pullable ([research-notes-v2.md](research-notes-v2.md#amazon-s3--sigv4--s3-compatible)). Both containers
+bind to `127.0.0.1` only, keep their data in memory and use test-only credentials.
+
+```bash
+tests/integration/run.sh            # start emulators, wait, run Category=Integration on net8.0, stop emulators
+tests/integration/run.sh --keep     # same, but leave the containers running
+
+# or by hand
+docker compose -f tests/integration/docker-compose.yml up -d
+NMG_INTEGRATION=1 dotnet test tests/NavMailGraph.Tests -c Release -f net8.0 --filter Category=Integration
+docker compose -f tests/integration/docker-compose.yml down
+```
+
+Covered: upload/download round trips with non-ASCII keys, 20 MiB block/multipart uploads with SHA-256 comparison,
+streams of unknown length, exists/size/list with paging, delete, `GetDownloadUrl` fetched with a plain HTTP client,
+wrong keys and missing containers/buckets, and `GraphMailbox.CopyAttachmentToStorage` from a fake Graph `$value`
+response into both emulators. Ports, credentials, the environment variables for other servers
+(`NMG_AZURITE_URL`, `NMG_S3_URL`, `NMG_S3_ACCESS_KEY`, `NMG_S3_SECRET_KEY`, `NMG_S3_REGION`) and emulator quirks:
+[../tests/integration/README.md](../tests/integration/README.md).
+
+Not covered by the emulators: Azure **Entra ID** mode (Azurite accepts bearer tokens only over HTTPS with
+`--oauth basic`, which the compose file does not set up; the mode is unit-tested with a fake token provider) and
+real cloud providers (AWS, R2, Wasabi). Test them with `nmg storage test` / `put` / `url` (below), or with *Test
+Connection* and *Upload Test File* on a NAV storage profile.
+
+CI runs the same tests in the job *Storage integration (Azurite + SeaweedFS)* on `ubuntu-latest` and fails when
+any of them was skipped. Run them locally before you push storage changes.
 
 ## End-to-end test with `nmg`
 
@@ -132,13 +170,42 @@ What to test before touching NAV:
   window).
 * `--cert-thumbprint` only works where a certificate store with the key exists (Windows); on macOS use `--cert-pfx`.
 
+### Reading mail and object storage (v0.2)
+
+`nmg` also wraps `GraphMailbox` and `ObjectStorageClient`. `nmg inbox --help` and `nmg storage --help` list all
+options; secrets for storage are read from environment variables only.
+
+```bash
+# reading (Mail.Read; mark-read/move need Mail.ReadWrite)
+nmg inbox list   --mailbox invoices@contoso.com --folder Inbox --since 2026-10-01T00:00:00Z
+nmg inbox get ID --mailbox invoices@contoso.com --folder Inbox
+nmg inbox save-attachment ID ATTACHMENT-ID ./out.pdf --mailbox invoices@contoso.com
+nmg inbox move ID Inbox/Processed --mailbox invoices@contoso.com
+nmg inbox delta --mailbox invoices@contoso.com --link-file ./delta.link     # read-only mode
+
+# object storage (here: the local SeaweedFS from tests/integration)
+export NMG_S3_SECRET=nmgtestsecretkey0123456789
+S3="--provider s3 --endpoint http://127.0.0.1:8333 --bucket nmg-dev --access-key nmgtestaccesskey --secret-key-env NMG_S3_SECRET"
+nmg storage test $S3
+nmg storage put ./big.pdf test/big.pdf $S3
+nmg storage url test/big.pdf --minutes 10 $S3
+
+# sending with link storage / attachments from storage
+nmg send --to me@contoso.com --subject Link --body "see link" --attach ./big.pdf \
+    --link-storage --link-threshold-mb 5 --link-days 1 $S3
+```
+
+`nmg storage test` against SeaweedFS needs an existing bucket; the integration tests create their own buckets.
+
 ## What cannot be tested on macOS
 
 | What | Where it is tested |
 |------|--------------------|
 | net462 build on the real .NET Framework runtime (DataContractJsonSerializer, `HttpClient` on .NET Framework, Windows crypto / CAPI keys) | GitHub Actions `windows-latest`: `dotnet test -f net462` |
 | Certificate from `LocalMachine\My`, private key ACL | a Windows test server |
-| C/AL objects (Codeunit 50400, patches to Codeunit 400, Table 409, Page 409) | C/SIDE in a NAV 2016 development database; **not in CI** |
+| C/AL objects (Codeunits 50400–50404, Tables 50400–50403, Pages 50400–50408, patches to Codeunit 400, Table 409, Page 409) | C/SIDE in a NAV 2016 development database; **not in CI**. `python3 nav/tools/check_cal.py` runs a static check on macOS |
+| Graph reading against a real mailbox (permissions, folder resolution, delta token expiry, `$select` on attachments) | a test tenant with `Application Mail.ReadWrite` / `Application Mail.Read` on a test mailbox, e.g. with `nmg inbox` |
+| Azure Entra ID storage mode, AWS S3 and other S3 providers | a real storage account / bucket |
 | Loading inside the NAV 2016 service tier, MSAL binding redirects | a NAV 2016 test server |
 
 ## CI
@@ -148,13 +215,14 @@ What to test before touching NAV:
 * matrix `ubuntu-latest`, `macos-latest`, `windows-latest`: restore, build (net462 + netstandard2.0 + tools),
   tests on net8.0;
 * Windows only: tests on net462 and `./build.sh --no-test`; uploads `dist/` as artifact `NavMailGraph-Addin`;
-* PSScriptAnalyzer over `deploy/` (errors fail the job).
+* PSScriptAnalyzer over `deploy/` (errors fail the job);
+* `ubuntu-latest`: storage integration tests against Azurite and SeaweedFS (Docker Compose, `NMG_INTEGRATION=1`).
 
 ## Release process
 
 1. Bump `VersionPrefix` in `Directory.Build.props` (e.g. `0.2.0`). Do **not** change `AssemblyVersion`
    (`1.0.0.0`; C/AL binds to it).
-2. Move the *Unreleased* entries in `CHANGELOG.md` under the new version.
+2. In `CHANGELOG.md` replace *Unreleased* in the heading of the new version with the release date.
 3. Commit, then tag and push:
 
    ```bash
@@ -163,7 +231,8 @@ What to test before touching NAV:
    ```
 
 4. `.github/workflows/release.yml` (on tags `v*`, `windows-latest`) checks that the tag equals `VersionPrefix`,
-   runs `./build.sh` (tests on net8.0 and net462), zips `Add-ins`, `nav` and `SHA256SUMS` into
+   runs `./build.sh` (tests on net8.0 and net462), copies the `deploy/` scripts, `deploy/README.md` and
+   `s3-iam-policy.json` to `dist/deploy`, rewrites `SHA256SUMS` over `Add-ins`, `nav` and `deploy`, zips all of them into
    `NavMailGraph-<version>.zip`, writes `NavMailGraph-<version>.zip.sha256` and publishes a GitHub release with
    generated notes.
 5. Check the release assets. The C/AL objects in the zip are still uncompiled; test them in C/SIDE.

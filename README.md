@@ -9,6 +9,11 @@ Codeunit 400 "SMTP Mail". Every existing caller (document mailing, reminders, re
 e-mails, your own code) keeps working unchanged. Mail goes out through `POST /users/{mailbox}/sendMail` with
 application permissions (OAuth 2.0 client credentials).
 
+Version 0.2 adds the other direction and large files: a job queue codeunit **reads mailboxes** and imports
+e-mails and attachments into NAV tables, an integration event hands them to your code (e.g. "create a purchase
+invoice from every PDF"), and large attachments go to **Azure Blob Storage or Amazon S3** – in both directions,
+including "send a download link instead of a 50 MB attachment".
+
 ## Why
 
 * NAV 2016 Codeunit 400 only speaks SMTP with user name and password. Microsoft has announced the end of basic
@@ -33,6 +38,8 @@ flowchart LR
     dll -- "client credentials<br/>(certificate or secret)" --> entra["Microsoft Entra ID<br/>login.microsoftonline.com"]
     dll -- "sendMail / draft + upload session" --> graph["Microsoft Graph<br/>graph.microsoft.com"]
     graph --> exo["Exchange Online<br/>sender mailbox<br/>(RBAC for Applications scope)"]
+    dll -. "0.2: read mail (job queue)" .-> graph
+    dll -. "0.2: large attachments, links" .-> storage[("Azure Blob Storage<br/>or Amazon S3")]
 ```
 
 The same picture as text:
@@ -65,6 +72,24 @@ The same picture as text:
 * Clouds: Global, US Government (L4), US Government DoD (L5), China (21Vianet).
 * PowerShell scripts for the certificate, the Entra app registration, the Exchange RBAC scope and the server
   installation.
+
+New in 0.2 ([docs/reading-mail.md](docs/reading-mail.md), [docs/large-attachments.md](docs/large-attachments.md),
+[docs/object-storage.md](docs/object-storage.md)):
+
+* **Reading mailboxes** from the NAV job queue: one setup line per mailbox, folder paths like `Inbox/Invoices`,
+  immutable Graph ids, import into NAV tables (header, body, attachments, original `.eml` on demand).
+* After import the mail is **moved to `<Folder>/Processed`** (default; failures to `<Folder>/Error`), or marked as
+  read, deleted, or left alone. Polling by a received-date **watermark** with de-duplication, or a **read-only delta
+  mode** that needs only Mail.Read.
+* **Integration events** `OnBeforeImportMail`, `OnAfterImportAttachment`, `OnAfterImportMail` for partner code; a
+  failing subscriber marks only that mail as Error.
+* **Large inbound attachments** are streamed (`$value`, never base64 in memory) into a NAV BLOB up to a size limit,
+  or **straight from Graph into object storage** without a temp file.
+* **Object storage** in the core DLL, still without NuGet dependencies: Azure Blob (Shared Key, SAS URL or Entra ID
+  token of the same app) and Amazon S3 / S3-compatible storage (SigV4, path-style for R2, Wasabi, SeaweedFS ...),
+  block/multipart uploads, list, delete, time-limited download links.
+* **Link instead of attachment** when sending: attachments above a threshold are uploaded and replaced by a download
+  link in the body; archived files can be attached straight from storage.
 * Builds and unit-tests on macOS; the .NET Framework build is tested on Windows in CI.
 
 ## Requirements
@@ -114,7 +139,8 @@ NAV 2016 itself documents .NET Framework 4.5.2 as its minimum. The add-in target
    Wait 30 minutes to 2 hours before the first real send (Exchange permission cache).
    Details: [docs/exchange-rbac.md](docs/exchange-rbac.md).
 
-4. **Install the add-in** on the NAV Server (elevated Windows PowerShell 5.1).
+4. **Install the add-in** on the NAV Server (elevated Windows PowerShell 5.1, in the `deploy\` folder of the
+   extracted release zip or of the repository after `./build.sh`).
 
    ```powershell
    .\Install-NavMailGraphAddin.ps1 -ServerInstance DynamicsNAV90 -PfxPath C:\Temp\NavMailGraph.pfx -FixTls
@@ -131,18 +157,30 @@ NAV 2016 itself documents .NET Framework 4.5.2 as its minimum. The add-in target
    `Microsoft Graph` and run the standard **Test Email Setup**. If something fails:
    [docs/troubleshooting.md](docs/troubleshooting.md).
 
+7. **Optional (0.2): read a mailbox.** Grant the app the mailbox (`Grant-NavMailGraphMailboxScope.ps1 -Mailbox
+   invoices@contoso.com -IncludeReadWrite`, or `-IncludeRead` for read-only), import the v0.2 objects
+   ([nav/README.md](nav/README.md#installation-v02)), create a line on **Graph Mailbox Setup**, run **Test
+   Connection** and **Poll Now**, then **Schedule Polling**. Concepts: [docs/reading-mail.md](docs/reading-mail.md).
+
+8. **Optional (0.2): object storage.** Create an **Object Storage Profile** (Azure Blob or S3), run **Test
+   Connection** and **Upload Test File**, then use it for large inbound attachments or as *Graph Link Storage
+   Profile* for sending. Setup and security: [docs/object-storage.md](docs/object-storage.md).
+
 ## Permissions
 
 | Permission | When | What it allows |
 |------------|------|----------------|
 | **Mail.Send** (application) | always | Send mail as the mailbox and save a copy to Sent Items. No reading. |
-| **Mail.ReadWrite** (application) | only for messages whose attachments total more than about 2.5 MB (the `sendMail` request incl. base64 encoding is limited to 3.5 MiB; a typical 3 MB scanned PDF already needs it; *Graph Large Messages* = Yes) | Create a draft, add attachments, upload sessions, delete the draft. Also read, change and delete mail in the mailbox. Does **not** include sending. |
+| **Mail.ReadWrite** (application) | sending: only for messages whose attachments total more than about 2.5 MB (the `sendMail` request incl. base64 encoding is limited to 3.5 MiB; a typical 3 MB scanned PDF already needs it; *Graph Large Messages* = Yes). Reading (0.2): for the default mode that moves processed mail, and for mark as read / delete | Create a draft, add attachments, upload sessions, delete the draft. Read, mark, move and delete mail and create folders in the mailbox. Does **not** include sending. |
+| **Mail.Read** (application) | reading (0.2) in read-only mode (*After Import* = Nothing); not needed when Mail.ReadWrite is granted | Read messages, bodies and attachments of the mailbox. No changes, no sending. Mail.ReadBasic is not enough (no body, no attachments). |
+| **Storage Blob Data Contributor** (Azure RBAC role) | only for object storage in Azure *Entra ID* mode (0.2), on the container | Read, write and delete blobs in that container. Shared Key, SAS URL and S3 profiles use their own keys instead. |
 
-Recommended: grant both **only** through Exchange Online RBAC for Applications (roles `Application Mail.Send`
-and `Application Mail.ReadWrite`), scoped to the sender mailbox, and **not** as Graph application permissions
-with admin consent in Entra ID. Entra and Exchange grants add up; a tenant-wide Entra grant makes any Exchange
-scope ineffective. Explained in [docs/exchange-rbac.md](docs/exchange-rbac.md). A German one-pager for
-customers: [docs/de/kundeninfo-berechtigungen.md](docs/de/kundeninfo-berechtigungen.md).
+Recommended: grant the mail permissions **only** through Exchange Online RBAC for Applications (roles
+`Application Mail.Send`, `Application Mail.ReadWrite`, `Application Mail.Read`), scoped to the NAV mailboxes, and
+**not** as Graph application permissions with admin consent in Entra ID. Entra and Exchange grants add up; a
+tenant-wide Entra grant makes any Exchange scope ineffective – for Mail.Read that means **every** mailbox can be
+read. Explained in [docs/exchange-rbac.md](docs/exchange-rbac.md) and [docs/reading-mail.md](docs/reading-mail.md#permissions).
+A German one-pager for customers: [docs/de/kundeninfo-berechtigungen.md](docs/de/kundeninfo-berechtigungen.md).
 
 ## Limits
 
@@ -156,6 +194,8 @@ customers: [docs/de/kundeninfo-berechtigungen.md](docs/de/kundeninfo-berechtigun
 | Recipient rate | 10,000 recipients per day per mailbox | Rolling 24 hours. |
 | Recipients per message | 500 (default) | To + Cc + Bcc; admins can set 1–1000. |
 | Graph upload volume | 150 MB per 5 minutes per app and mailbox | Relevant for many large attachments. |
+| Graph requests (reading) | 10,000 per 10 minutes and 4 concurrent per app and mailbox | The add-in runs at most 4 requests per mailbox at a time and retries 429/503 with `Retry-After`. |
+| S3 presigned link | 7 days | Longer link validity fails before anything is uploaded. Azure Shared Key links have no such cap. |
 
 The add-in does not enforce the Exchange limits; tenants can change them. Exchange Online is not meant for bulk
 mail. A `202 Accepted` from Graph means "accepted", not "delivered": rejected recipients show up later as
@@ -170,18 +210,24 @@ non-delivery reports in the sender mailbox.
 | [docs/deployment.md](docs/deployment.md) | Windows server: install script, manual steps, certificate, TLS, proxy, MSAL, updates |
 | [nav/README.md](nav/README.md) | NAV objects: import, patches, configuration, tests, rollback |
 | [docs/development-macos.md](docs/development-macos.md) | Build, tests, `nmg` CLI, release process |
+| [docs/reading-mail.md](docs/reading-mail.md) | Reading mailboxes: processing modes, watermark, delta, permissions, job queue, events, limits |
+| [docs/object-storage.md](docs/object-storage.md) | Azure Blob (Shared Key, SAS, Entra ID) and S3: setup, IAM policy, providers, key layout, security |
+| [docs/large-attachments.md](docs/large-attachments.md) | Large attachments when sending (draft, upload session, link) and receiving (streaming, BLOB limit, storage) |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Error codes, causes and fixes; log file |
 | [docs/de/kundeninfo-berechtigungen.md](docs/de/kundeninfo-berechtigungen.md) | German customer information on permissions |
 | [deploy/README.md](deploy/README.md) | PowerShell scripts in detail |
-| [docs/DESIGN.md](docs/DESIGN.md) | Design and API contract |
-| [docs/research-notes.md](docs/research-notes.md) | Verified facts with Microsoft sources |
+| [docs/DESIGN.md](docs/DESIGN.md), [docs/DESIGN-v2.md](docs/DESIGN-v2.md) | Design and API contract (v0.1, v0.2) |
+| [docs/research-notes.md](docs/research-notes.md), [docs/research-notes-v2.md](docs/research-notes-v2.md) | Verified facts with Microsoft, AWS and NAV sources |
+| [CHANGELOG.md](CHANGELOG.md) | Changes per version |
 
 ## Status and disclaimer
 
-* Version 0.1.0, pre-release. Use a test tenant and a NAV test database first.
-* The C/AL objects (Codeunit 50400 and the patches) are **not compiled in CI**; there is no NAV 2016
-  compiler there. They were checked statically against NAV 2016 CU1 object exports. Import and compile them in
-  C/SIDE and test before production.
+* Version 0.2.0 in development (0.1.0 = sending only), pre-release. Use a test tenant and a NAV test database first.
+* The C/AL objects (Codeunits 50400–50404, Tables/Pages 504xx and the patches) are **not compiled in CI**; there
+  is no NAV 2016 compiler there. They were checked statically against NAV 2016 CU1 object exports
+  (`nav/tools/check_cal.py`). Import and compile them in C/SIDE and test before production.
+* Object storage was tested against the Azurite and SeaweedFS emulators; Graph reading against a fake Graph server
+  in the unit tests. Test both against your real tenant, storage account or bucket before going live.
 * The Microsoft objects (Codeunit 400, Table 409, Page 409) are not redistributed. The repository only contains
   patch instructions.
 * This project is **not affiliated with, endorsed or supported by Microsoft**. Microsoft, Microsoft 365,

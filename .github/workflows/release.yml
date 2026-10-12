@@ -39,8 +39,13 @@ jobs:
       - name: Zip
         shell: bash
         run: |
+          # The install docs run deploy\Install-NavMailGraphAddin.ps1 from the extracted release folder
+          # (it finds ..\Add-ins\NavMailGraph and ..\SHA256SUMS), so the deploy scripts ship in the zip.
+          mkdir -p dist/deploy
+          cp deploy/*.ps1 deploy/README.md deploy/s3-iam-policy.json dist/deploy/
           cd dist
-          7z a -tzip "../NavMailGraph-${VERSION}.zip" Add-ins nav SHA256SUMS
+          find Add-ins nav deploy -type f | sort | xargs sha256sum > SHA256SUMS
+          7z a -tzip "../NavMailGraph-${VERSION}.zip" Add-ins nav deploy SHA256SUMS
           cd ..
           sha256sum "NavMailGraph-${VERSION}.zip" > "NavMailGraph-${VERSION}.zip.sha256"
 

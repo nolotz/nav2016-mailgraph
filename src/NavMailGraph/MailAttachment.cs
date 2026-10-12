@@ -18,6 +18,23 @@ namespace NavMailGraph
             ContentId = contentId;
         }
 
+        /// <summary>An attachment whose content is downloaded from object storage at send time (into a temp file).</summary>
+        internal static MailAttachment FromStorage(ObjectStorageClient storage, string objectKey, string name, string contentType)
+        {
+            return new MailAttachment(name, contentType, null, null, false, "") { Storage = storage, StorageKey = objectKey };
+        }
+
+        /// <summary>Object storage source (AddAttachmentFromStorage), null for file/byte attachments.</summary>
+        internal ObjectStorageClient? Storage { get; private set; }
+
+        /// <summary>Object key (relative to the storage's KeyPrefix) of a storage attachment, "" otherwise.</summary>
+        internal string StorageKey { get; private set; } = "";
+
+        internal bool IsFromStorage
+        {
+            get { return Storage != null; }
+        }
+
         /// <summary>File name shown in the mail.</summary>
         internal string Name { get; }
 
@@ -44,6 +61,12 @@ namespace NavMailGraph
         /// <summary>True when the content is available (file exists or bytes present).</summary>
         internal bool Exists()
         {
+            if (Storage != null)
+            {
+                // Content is fetched at send time; until then the size is unknown (counted as 0).
+                return false;
+            }
+
             return FilePath == null ? Bytes != null : File.Exists(FilePath);
         }
 
@@ -109,6 +132,11 @@ namespace NavMailGraph
             if (FilePath != null)
             {
                 text += ", file";
+            }
+
+            if (Storage != null)
+            {
+                text += ", object storage key " + StorageKey;
             }
 
             return text + ")";

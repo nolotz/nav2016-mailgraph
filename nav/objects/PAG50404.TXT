@@ -1,0 +1,103 @@
+OBJECT Page 50404 Object Storage Profiles
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    Editable=No;
+    CaptionML=[DEU=Objektspeicherprofile;
+               ENU=Object Storage Profiles];
+    SourceTable=Table50403;
+    PageType=List;
+    CardPageID=Object Storage Profile Card;
+    ActionList=ACTIONS
+    {
+      { 100     ;    ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 101     ;1   ;Action    ;
+                      Name=TestConnection;
+                      CaptionML=[DEU=Verbindung testen;
+                                 ENU=Test Connection];
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=ServiceSetup;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ObjectStorageMgt.ShowConnectionTest(Code);
+                               END;
+                                }
+      { 102     ;1   ;Action    ;
+                      Name=UploadTestFile;
+                      CaptionML=[DEU=Testdatei hochladen;
+                                 ENU=Upload Test File];
+                      Promoted=Yes;
+                      Image=Import;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ObjectStorageMgt.UploadTestFile(Code);
+                               END;
+                                }
+      { 103     ;1   ;Action    ;
+                      Name=ShowConfiguration;
+                      CaptionML=[DEU=Konfiguration anzeigen;
+                                 ENU=Show Configuration];
+                      Image=ViewDetails;
+                      OnAction=BEGIN
+                                 MESSAGE(ObjectStorageMgt.Describe(Code));
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=Group;
+                GroupType=Repeater }
+
+    { 3   ;2   ;Field     ;
+                SourceExpr=Code }
+
+    { 4   ;2   ;Field     ;
+                SourceExpr=Description }
+
+    { 5   ;2   ;Field     ;
+                SourceExpr=Provider }
+
+    { 6   ;2   ;Field     ;
+                SourceExpr="Account Name" }
+
+    { 7   ;2   ;Field     ;
+                SourceExpr="Container Name" }
+
+    { 8   ;2   ;Field     ;
+                SourceExpr="Service URL" }
+
+    { 9   ;2   ;Field     ;
+                SourceExpr=Region }
+
+    { 10  ;2   ;Field     ;
+                SourceExpr="Key Prefix" }
+
+  }
+  CODE
+  {
+    VAR
+      ObjectStorageMgt@1000 : Codeunit 50402;
+
+    BEGIN
+    {
+      nav2016-mailgraph - Page 50404 "Object Storage Profiles" (list, card = Page 50407).
+      Not compiled in CI - compile and test in C/SIDE (NAV 2016) before use.
+
+      NMG2.00  initial version
+    }
+    END.
+  }
+}

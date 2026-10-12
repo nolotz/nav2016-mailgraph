@@ -1,0 +1,104 @@
+OBJECT Table 50403 Object Storage Profile
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 1261=rimd;
+    OnDelete=VAR
+               ObjectStorageMgt@1000 : Codeunit 50402;
+             BEGIN
+               ObjectStorageMgt.DeleteSecret(Rec);
+             END;
+
+    CaptionML=[DEU=Objektspeicherprofil;
+               ENU=Object Storage Profile];
+    LookupPageID=Page50404;
+    DrillDownPageID=Page50404;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Code                ;Code20        ;NotBlank=Yes;
+                                                   CaptionML=[DEU=Code;
+                                                              ENU=Code] }
+    { 2   ;   ;Description         ;Text50        ;CaptionML=[DEU=Beschreibung;
+                                                              ENU=Description] }
+    { 3   ;   ;Provider            ;Option        ;CaptionML=[DEU=Anbieter;
+                                                              ENU=Provider];
+                                                   OptionCaptionML=[DEU=Azure Blob (gemeinsamer SchlÅssel),Azure Blob (SAS-URL),Azure Blob (Entra ID),Amazon S3 / S3-kompatibel;
+                                                                    ENU=Azure Blob Shared Key,Azure Blob SAS URL,Azure Blob Entra ID,Amazon S3];
+                                                   OptionString=Azure Blob Shared Key,Azure Blob SAS URL,Azure Blob Entra ID,Amazon S3 }
+    { 4   ;   ;Account Name        ;Text100       ;CaptionML=[DEU=Kontoname;
+                                                              ENU=Account Name] }
+    { 5   ;   ;Container Name      ;Text100       ;CaptionML=[DEU=Container / Bucket;
+                                                              ENU=Container / Bucket] }
+    { 6   ;   ;Service URL         ;Text250       ;CaptionML=[DEU=Dienst-URL;
+                                                              ENU=Service URL] }
+    { 7   ;   ;Region              ;Text50        ;CaptionML=[DEU=Region;
+                                                              ENU=Region] }
+    { 8   ;   ;Access Key ID       ;Text100       ;CaptionML=[DEU=ZugriffsschlÅssel-ID;
+                                                              ENU=Access Key ID] }
+    { 9   ;   ;Secret Key          ;GUID          ;TableRelation="Service Password".Key;
+                                                   CaptionML=[DEU=GeheimnisschlÅssel;
+                                                              ENU=Secret Key] }
+    { 10  ;   ;S3 Addressing       ;Option        ;CaptionML=[DEU=S3-Adressierung;
+                                                              ENU=S3 Addressing];
+                                                   OptionCaptionML=[DEU=Automatisch,Pfadstil,Virtual-Hosted-Stil;
+                                                                    ENU=Automatic,Path Style,Virtual Hosted Style];
+                                                   OptionString=Automatic,Path Style,Virtual Hosted Style }
+    { 11  ;   ;Key Prefix          ;Text100       ;CaptionML=[DEU=SchlÅsselprÑfix;
+                                                              ENU=Key Prefix] }
+    { 12  ;   ;Multipart Threshold (MB);Integer   ;InitValue=64;
+                                                   MinValue=0;
+                                                   CaptionML=[DEU=Mehrteilig ab (MB);
+                                                              ENU=Multipart Threshold (MB)] }
+    { 13  ;   ;Part Size (MB)      ;Integer       ;InitValue=8;
+                                                   MinValue=0;
+                                                   MaxValue=2000;
+                                                   CaptionML=[DEU=Teilgrî·e (MB);
+                                                              ENU=Part Size (MB)] }
+    { 14  ;   ;Timeout (sec.)      ;Integer       ;InitValue=300;
+                                                   MinValue=0;
+                                                   CaptionML=[DEU=Zeitlimit (Sek.);
+                                                              ENU=Timeout (sec.)] }
+    { 15  ;   ;Max. Retries        ;Integer       ;InitValue=3;
+                                                   MinValue=0;
+                                                   CaptionML=[DEU=Max. Wiederholungen;
+                                                              ENU=Max. Retries] }
+    { 16  ;   ;Azure API Version   ;Text20        ;CaptionML=[DEU=Azure-API-Version;
+                                                              ENU=Azure API Version] }
+    { 17  ;   ;Blob Endpoint Suffix;Text100       ;CaptionML=[DEU=Blob-Endpunktsuffix;
+                                                              ENU=Blob Endpoint Suffix] }
+    { 18  ;   ;Download Link Validity (Min.);Integer;
+                                                   InitValue=60;
+                                                   MinValue=1;
+                                                   CaptionML=[DEU=GÅltigkeit Downloadlink (Min.);
+                                                              ENU=Download Link Validity (Min.)] }
+    { 19  ;   ;Log File Path       ;Text250       ;CaptionML=[DEU=Protokolldateipfad;
+                                                              ENU=Log File Path] }
+  }
+  KEYS
+  {
+    {    ;Code                                    ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+    { 1   ;DropDown            ;Code,Description,Provider                }
+  }
+  CODE
+  {
+    BEGIN
+    {
+      nav2016-mailgraph - Table 50403 "Object Storage Profile" (Azure Blob Storage or Amazon S3 / S3-compatible).
+      The secret (Azure account key, container SAS URL or S3 secret access key) is stored in Table 1261
+      "Service Password" (pattern of Table 1260); this table keeps only the GUID in "Secret Key".
+      Use Codeunit 50402 SetSecret/GetSecret/HasSecret/DeleteSecret. Entra ID mode uses the Graph app
+      registration of Table 409 (no secret here).
+    }
+    END.
+  }
+}

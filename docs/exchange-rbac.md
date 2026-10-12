@@ -34,7 +34,13 @@ scope is useless.
 | Exchange application role | Needed for | What it allows inside the scope |
 |---------------------------|------------|---------------------------------|
 | `Application Mail.Send` | always (`sendMail`, sending a draft) | send mail as the mailbox; save to Sent Items |
-| `Application Mail.ReadWrite` | only messages whose attachments total more than about 2.5 MB (the `sendMail` request incl. base64 encoding is limited to 3.5 MiB; NAV *Graph Large Messages* = Yes) | create/read/change/delete messages in the mailbox: draft, attachments, upload session, draft cleanup. **No** sending. |
+| `Application Mail.ReadWrite` | only messages whose attachments total more than about 2.5 MB (the `sendMail` request incl. base64 encoding is limited to 3.5 MiB; NAV *Graph Large Messages* = Yes); reading mail (0.2) in the default mode that moves processed mail, or marks/deletes it | create/read/change/delete messages in the mailbox: draft, attachments, upload session, draft cleanup; mark, move, delete, create folders. **No** sending. |
+| `Application Mail.Read` | reading mail (0.2) in read-only mode (*After Import* = Nothing); not needed when `Application Mail.ReadWrite` is assigned | read messages, bodies and attachments. No changes, no sending. |
+
+Reading roles apply to the **whole** mailbox; there is no folder-level application permission. Put the mailboxes
+NAV imports from (e.g. a shared mailbox `invoices@contoso.com`) into the scope, never a person's mailbox.
+`Application Mail.ReadBasic` is not enough for NAV: it excludes body and attachments. Details:
+[reading-mail.md](reading-mail.md#permissions).
 
 `Mail.ReadWrite` gives read access to the mail in the scoped mailbox. That is the reason it is optional. If NAV
 never sends attachments totalling more than about 2.5 MB, do not assign it and set *Graph Large Messages* = No. NAV then reports
@@ -67,7 +73,8 @@ Install-Module ExchangeOnlineManagement -Scope CurrentUser
     -DisplayName 'NAV2016 MailGraph' -Mailbox nav@contoso.com -NegativeTestMailbox ceo@contoso.com
 ```
 
-Add `-IncludeReadWrite` for `Application Mail.ReadWrite`. Several mailboxes: `-Mailbox nav@contoso.com,
+Add `-IncludeReadWrite` for `Application Mail.ReadWrite`, or `-IncludeRead` for `Application Mail.Read` (read-only
+import). Several mailboxes: `-Mailbox nav@contoso.com,
 invoices@contoso.com`. Other parameters: `-ScopeName` (default `NavMailGraph <DisplayName>`), `-GroupDistinguishedName`,
 `-TestMailbox`, `-UserPrincipalName`, `-SkipConnect`, `-WhatIf`.
 
@@ -75,7 +82,7 @@ The script is idempotent. It runs the manual steps below, tests the scope with
 `Test-ServicePrincipalAuthorization` (expects `InScope = True` for the sender and `False` for
 `-NegativeTestMailbox`) and warns when the app also has a tenant-wide Entra grant (checked automatically when a
 Microsoft Graph PowerShell session is connected). Role assignment names are `<ScopeName> Mail.Send` and
-`<ScopeName> Mail.ReadWrite`.
+`<ScopeName> Mail.ReadWrite` (and `<ScopeName> Mail.Read`).
 
 Re-run behaviour worth knowing:
 
@@ -148,9 +155,14 @@ Exclusive management scopes do not restrict app access. Use normal scopes.
 New-ManagementRoleAssignment -Name 'NavMailGraph NAV2016 MailGraph Mail.Send' -App <sp object id> `
     -Role 'Application Mail.Send' -CustomResourceScope 'NavMailGraph NAV2016 MailGraph'
 
-# only for attachments > ~2.5 MB in total (sendMail request incl. base64 is limited to 3.5 MiB)
+# only for attachments > ~2.5 MB in total (sendMail request incl. base64 is limited to 3.5 MiB),
+# or for reading mail with move / mark as read / delete (0.2)
 New-ManagementRoleAssignment -Name 'NavMailGraph NAV2016 MailGraph Mail.ReadWrite' -App <sp object id> `
     -Role 'Application Mail.ReadWrite' -CustomResourceScope 'NavMailGraph NAV2016 MailGraph'
+
+# only for read-only mail import (0.2) without Mail.ReadWrite
+New-ManagementRoleAssignment -Name 'NavMailGraph NAV2016 MailGraph Mail.Read' -App <sp object id> `
+    -Role 'Application Mail.Read' -CustomResourceScope 'NavMailGraph NAV2016 MailGraph'
 ```
 
 The cmdlet reference says `-App` takes the service principal ObjectId; the RBAC article also mentions AppId or
@@ -197,6 +209,7 @@ Set-ManagementRoleAssignment -Identity 'NavMailGraph NAV2016 MailGraph Mail.Send
 # remove (assignments first, then the scope)
 Remove-ManagementRoleAssignment -Identity 'NavMailGraph NAV2016 MailGraph Mail.Send'
 Remove-ManagementRoleAssignment -Identity 'NavMailGraph NAV2016 MailGraph Mail.ReadWrite'
+Remove-ManagementRoleAssignment -Identity 'NavMailGraph NAV2016 MailGraph Mail.Read'
 Remove-ManagementScope -Identity 'NavMailGraph NAV2016 MailGraph'
 ```
 

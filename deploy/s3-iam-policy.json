@@ -1,0 +1,31 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "NavMailGraphListPrefix",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::my-nav-bucket",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "nav-mail/",
+            "nav-mail/*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "NavMailGraphObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": "arn:aws:s3:::my-nav-bucket/nav-mail/*"
+    }
+  ]
+}

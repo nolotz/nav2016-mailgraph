@@ -38,7 +38,7 @@ namespace NavMailGraph
     /// process-wide and thread-safe. All operations are synchronous and never throw for auth/Graph/IO/validation
     /// problems; they return the complete error text instead (see docs/DESIGN.md section 4).
     /// </summary>
-    public sealed class GraphMailSender
+    public sealed partial class GraphMailSender
     {
         internal const int DefaultTimeoutSeconds = 100;
 
@@ -92,11 +92,11 @@ namespace NavMailGraph
             Provider,
         }
 
-        private readonly string _tenantId;
+        private string _tenantId;
 
-        private readonly string _clientId;
+        private string _clientId;
 
-        private readonly HttpClient? _httpClient;
+        private HttpClient? _httpClient;
 
         private readonly Diagnostics _diag = new Diagnostics();
 
@@ -135,6 +135,14 @@ namespace NavMailGraph
         private Func<TimeSpan, CancellationToken, Task>? _retryDelayOverride;
 
         private int _maxRetries = DefaultMaxRetries;
+
+        private ObjectStorageClient? _linkStorage;
+
+        private long _linkThresholdBytes;
+
+        private int _linkValidMinutes;
+
+        private string _linkText = "";
 
         /// <summary>Creates a sender for an Entra app registration.</summary>
         /// <param name="tenantId">Tenant id (GUID) or verified domain name.</param>
@@ -217,6 +225,78 @@ namespace NavMailGraph
             _explicitProvider = provider ?? throw new ArgumentNullException(nameof(provider));
             _credentialKind = CredentialKind.Provider;
             ResetCredentialState();
+        }
+
+        /// <summary>
+        /// Copies the connection settings of <paramref name="connection"/> (tenant, client, credential, token library, cloud,
+        /// Graph base URL, authority host, SendX5C, timeout, retries, log path) into this sender. Sender-specific settings
+        /// (SenderMailbox, SaveToSentItems, size limits, ...) are kept. The copy is a snapshot: call UseConnection again after
+        /// changing the connection.
+        /// </summary>
+        public void UseConnection(GraphConnection connection)
+        {
+            if (connection == null)
+            {
+                throw new ArgumentNullException(nameof(connection));
+            }
+
+            GraphMailSender source = connection.Settings;
+            _tenantId = source._tenantId;
+            _clientId = source._clientId;
+            if (source._httpClient != null)
+            {
+                _httpClient = source._httpClient;
+            }
+
+            _credentialKind = source._credentialKind;
+            _clientSecret = source._clientSecret;
+            _thumbprint = source._thumbprint;
+            _pfxPath = source._pfxPath;
+            _pfxPassword = source._pfxPassword;
+            _explicitProvider = source._explicitProvider;
+            _tokenLibrary = source._tokenLibrary;
+            _cloud = source._cloud;
+            _graphBaseUrl = source._graphBaseUrl;
+            _authorityHost = source._authorityHost;
+            _sendX5C = source._sendX5C;
+            _timeoutSeconds = source._timeoutSeconds;
+            _maxRetries = source._maxRetries;
+            _logFilePath = source._logFilePath;
+            if (source._retryDelayOverride != null)
+            {
+                _retryDelayOverride = source._retryDelayOverride;
+            }
+
+            ResetCredentialState();
+        }
+
+        /// <summary>
+        /// Sends large attachments as download links instead (docs/DESIGN-v2.md section 2.4): at Send, every non-inline attachment
+        /// of <paramref name="thresholdBytes"/> or more is uploaded to <paramref name="storage"/> under
+        /// "mail-attachments/{yyyy}/{MM}/{guid}/{fileName}" (after the storage's KeyPrefix) and replaced by a link line appended to
+        /// the body (an HTML &lt;a&gt; paragraph for HTML bodies, inserted before &lt;/body&gt; when present; a plain "text: url" line
+        /// for text bodies). The link is created with GetDownloadUrl semantics and is valid for <paramref name="validMinutes"/>
+        /// (S3 at most 7 days; in Azure SAS-URL mode the SAS's own expiry applies; not available in Azure Entra mode).
+        /// <paramref name="linkText"/> is a .NET format string: {0} = file name, {1} = size (e.g. "20.0 MB"), {2} = link expiry
+        /// ("yyyy-MM-dd HH:mm UTC"); "" = "Download {0} ({1})". If a link cannot be created or the upload fails, Send fails with the
+        /// error text and nothing is sent. The storage client is used with its settings at send time. Throws
+        /// <see cref="ArgumentNullException"/> only for a null storage; invalid numbers are reported by Send.
+        /// </summary>
+        public void UseLinkStorage(ObjectStorageClient storage, long thresholdBytes, int validMinutes, string linkText)
+        {
+            _linkStorage = storage ?? throw new ArgumentNullException(nameof(storage));
+            _linkThresholdBytes = thresholdBytes;
+            _linkValidMinutes = validMinutes;
+            _linkText = linkText ?? "";
+        }
+
+        /// <summary>Turns link storage off again: all attachments are sent as attachments.</summary>
+        public void ClearLinkStorage()
+        {
+            _linkStorage = null;
+            _linkThresholdBytes = 0;
+            _linkValidMinutes = 0;
+            _linkText = "";
         }
 
         /// <summary>"BuiltIn" (default) or "Msal" (loads NavMailGraph.Msal.dll by reflection at the first Send). Case-insensitive.</summary>
@@ -363,7 +443,7 @@ namespace NavMailGraph
             LastMessageId = "";
             try
             {
-                AsyncHelper.RunSync(() => SendCoreAsync(message, CancellationToken.None));
+                AsyncHelper.RunSync(() => SendWithStorageAsync(message, CancellationToken.None));
                 _diag.Log("Send completed" + (LastMessageId.Length > 0 ? " (message id " + LastMessageId + ")" : ""));
                 return "";
             }
@@ -499,6 +579,44 @@ namespace NavMailGraph
                 return _builtProvider;
             }
 
+            ITokenProvider provider = BuildProvider(endpoints, EffectiveScope(endpoints));
+            _builtProvider = provider;
+            return provider;
+        }
+
+        /// <summary>
+        /// A token provider for another resource of the same app registration (e.g. Azure Storage, scope
+        /// https://storage.azure.com/.default). The built-in/MSAL token caches are keyed by scope, so tokens are reused.
+        /// An explicit provider (<see cref="UseTokenProvider"/>) is returned unchanged: it must issue tokens for that resource itself.
+        /// </summary>
+        internal ITokenProvider CreateTokenProviderForScope(CloudEndpoints endpoints, string scope)
+        {
+            if (_explicitProvider != null)
+            {
+                return _explicitProvider;
+            }
+
+            return BuildProvider(endpoints, scope);
+        }
+
+        /// <summary>True when the credential is a caller-supplied <see cref="ITokenProvider"/>.</summary>
+        internal bool HasExplicitTokenProvider
+        {
+            get { return _explicitProvider != null; }
+        }
+
+        internal string TenantId
+        {
+            get { return _tenantId; }
+        }
+
+        internal string ClientId
+        {
+            get { return _clientId; }
+        }
+
+        private ITokenProvider BuildProvider(CloudEndpoints endpoints, string scope)
+        {
             if (_tenantId.Length == 0)
             {
                 throw GraphMailException.Validation("Validation failed: Tenant ID is required.");
@@ -520,33 +638,34 @@ namespace NavMailGraph
                 throw GraphMailException.Validation("Validation failed: no credential configured (call UseClientSecret, UseCertificateThumbprint, UseCertificateFile or UseTokenProvider).");
             }
 
-            ITokenProvider provider;
             if (_tokenLibrary.Length == 0 || string.Equals(_tokenLibrary, BuiltInLibraryName, StringComparison.OrdinalIgnoreCase))
             {
-                provider = new BuiltInTokenProvider(BuildTokenProviderSettings(endpoints), HttpClient, _diag, EffectiveTimeoutSeconds, EffectiveMaxRetries, _retryDelayOverride);
-            }
-            else if (string.Equals(_tokenLibrary, MsalLibraryName, StringComparison.OrdinalIgnoreCase))
-            {
-                provider = MsalBridge.Create(BuildTokenProviderSettings(endpoints));
-            }
-            else
-            {
-                throw GraphMailException.Validation("Validation failed: unknown TokenLibrary '" + _tokenLibrary + "' (expected BuiltIn or Msal).");
+                return new BuiltInTokenProvider(BuildTokenProviderSettings(endpoints, scope), HttpClient, _diag, EffectiveTimeoutSeconds, EffectiveMaxRetries, _retryDelayOverride);
             }
 
-            _builtProvider = provider;
-            return provider;
+            if (string.Equals(_tokenLibrary, MsalLibraryName, StringComparison.OrdinalIgnoreCase))
+            {
+                return MsalBridge.Create(BuildTokenProviderSettings(endpoints, scope));
+            }
+
+            throw GraphMailException.Validation("Validation failed: unknown TokenLibrary '" + _tokenLibrary + "' (expected BuiltIn or Msal).");
         }
 
         /// <summary>Builds the settings handed to the built-in or MSAL provider (loads the certificate when needed).</summary>
         internal TokenProviderSettings BuildTokenProviderSettings(CloudEndpoints endpoints)
+        {
+            return BuildTokenProviderSettings(endpoints, EffectiveScope(endpoints));
+        }
+
+        /// <summary>Same as <see cref="BuildTokenProviderSettings(CloudEndpoints)"/> for an explicit scope.</summary>
+        internal TokenProviderSettings BuildTokenProviderSettings(CloudEndpoints endpoints, string scope)
         {
             var settings = new TokenProviderSettings
             {
                 TenantId = _tenantId,
                 ClientId = _clientId,
                 AuthorityHost = EffectiveAuthorityHost(endpoints),
-                Scope = EffectiveScope(endpoints),
+                Scope = scope,
                 SendX5C = _sendX5C,
             };
 

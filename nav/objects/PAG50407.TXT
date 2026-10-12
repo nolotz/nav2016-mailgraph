@@ -1,0 +1,196 @@
+OBJECT Page 50407 Object Storage Profile Card
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[DEU=Objektspeicherprofilkarte;
+               ENU=Object Storage Profile Card];
+    SourceTable=Table50403;
+    PageType=Card;
+    OnAfterGetRecord=BEGIN
+                       UpdateSecretPlaceholder;
+                     END;
+
+    OnNewRecord=BEGIN
+                  SecretText := '';
+                END;
+
+    ActionList=ACTIONS
+    {
+      { 100     ;    ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 101     ;1   ;Action    ;
+                      Name=TestConnection;
+                      CaptionML=[DEU=Verbindung testen;
+                                 ENU=Test Connection];
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=ServiceSetup;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 CurrPage.SAVERECORD;
+                                 ObjectStorageMgt.ShowConnectionTest(Code);
+                               END;
+                                }
+      { 102     ;1   ;Action    ;
+                      Name=UploadTestFile;
+                      CaptionML=[DEU=Testdatei hochladen;
+                                 ENU=Upload Test File];
+                      Promoted=Yes;
+                      Image=Import;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 CurrPage.SAVERECORD;
+                                 ObjectStorageMgt.UploadTestFile(Code);
+                               END;
+                                }
+      { 103     ;1   ;Action    ;
+                      Name=ShowConfiguration;
+                      CaptionML=[DEU=Konfiguration anzeigen;
+                                 ENU=Show Configuration];
+                      Image=ViewDetails;
+                      OnAction=BEGIN
+                                 CurrPage.SAVERECORD;
+                                 MESSAGE(ObjectStorageMgt.Describe(Code));
+                               END;
+                                }
+      { 110     ;    ;ActionContainer;
+                      ActionContainerType=RelatedInformation }
+      { 111     ;1   ;Action    ;
+                      Name=EncryptionManagement;
+                      CaptionML=[DEU=VerschlÅsselungsverwaltung;
+                                 ENU=Encryption Management];
+                      RunObject=Page 9905;
+                      Image=EncryptionKeys }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=General;
+                CaptionML=[DEU=Allgemein;
+                           ENU=General];
+                GroupType=Group }
+
+    { 3   ;2   ;Field     ;
+                SourceExpr=Code }
+
+    { 4   ;2   ;Field     ;
+                SourceExpr=Description }
+
+    { 5   ;2   ;Field     ;
+                SourceExpr=Provider }
+
+    { 10  ;1   ;Group     ;
+                Name=Connection;
+                CaptionML=[DEU=Verbindung;
+                           ENU=Connection];
+                GroupType=Group }
+
+    { 11  ;2   ;Field     ;
+                SourceExpr="Account Name" }
+
+    { 12  ;2   ;Field     ;
+                SourceExpr="Container Name" }
+
+    { 13  ;2   ;Field     ;
+                SourceExpr="Service URL" }
+
+    { 14  ;2   ;Field     ;
+                SourceExpr=Region }
+
+    { 15  ;2   ;Field     ;
+                SourceExpr="Access Key ID" }
+
+    { 16  ;2   ;Field     ;
+                Name=Secret;
+                ExtendedDatatype=Masked;
+                CaptionML=[DEU=Geheimnis (KontoschlÅssel, SAS-URL oder geheimer ZugriffsschlÅssel);
+                           ENU=Secret (Account Key, SAS URL or Secret Access Key)];
+                SourceExpr=SecretText;
+                OnValidate=BEGIN
+                             IF SecretText <> SecretPlaceholderTxt THEN
+                               ObjectStorageMgt.SetSecret(Rec,SecretText);
+                             UpdateSecretPlaceholder;
+                           END;
+                            }
+
+    { 17  ;2   ;Field     ;
+                SourceExpr="S3 Addressing" }
+
+    { 20  ;1   ;Group     ;
+                Name=Options;
+                CaptionML=[DEU=Optionen;
+                           ENU=Options];
+                GroupType=Group }
+
+    { 21  ;2   ;Field     ;
+                SourceExpr="Key Prefix" }
+
+    { 22  ;2   ;Field     ;
+                SourceExpr="Download Link Validity (Min.)" }
+
+    { 23  ;2   ;Field     ;
+                SourceExpr="Multipart Threshold (MB)";
+                Importance=Additional }
+
+    { 24  ;2   ;Field     ;
+                SourceExpr="Part Size (MB)";
+                Importance=Additional }
+
+    { 25  ;2   ;Field     ;
+                SourceExpr="Timeout (sec.)";
+                Importance=Additional }
+
+    { 26  ;2   ;Field     ;
+                SourceExpr="Max. Retries";
+                Importance=Additional }
+
+    { 27  ;2   ;Field     ;
+                SourceExpr="Azure API Version";
+                Importance=Additional }
+
+    { 28  ;2   ;Field     ;
+                SourceExpr="Blob Endpoint Suffix";
+                Importance=Additional }
+
+    { 29  ;2   ;Field     ;
+                SourceExpr="Log File Path";
+                Importance=Additional }
+
+  }
+  CODE
+  {
+    VAR
+      ObjectStorageMgt@1000 : Codeunit 50402;
+      SecretText@1001 : Text;
+      SecretPlaceholderTxt@1002 : TextConst 'DEU=**********;ENU=**********';
+
+    LOCAL PROCEDURE UpdateSecretPlaceholder@1();
+    BEGIN
+      // Never load the real secret into the page; show a placeholder when one is stored.
+      IF ObjectStorageMgt.HasSecret(Rec) THEN
+        SecretText := SecretPlaceholderTxt
+      ELSE
+        SecretText := '';
+    END;
+
+    BEGIN
+    {
+      nav2016-mailgraph - Page 50407 "Object Storage Profile Card".
+      The secret field writes into Table 1261 "Service Password" via Codeunit 50402.SetSecret.
+      Not compiled in CI - compile and test in C/SIDE (NAV 2016) before use.
+
+      NMG2.00  initial version
+    }
+    END.
+  }
+}

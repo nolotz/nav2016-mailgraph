@@ -1,0 +1,1232 @@
+OBJECT Codeunit 50401 Graph Mailbox Polling
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    TableNo=472;
+    OnRun=VAR
+            MailboxSetup@1000 : Record 50400;
+            MailboxCode@1001 : Code[20];
+          BEGIN
+            // Job Queue entry point: Codeunit 449 runs this codeunit with the Job Queue Entry.
+            // "Parameter String" = mailbox code, or blank to poll all enabled mailboxes.
+            MailboxCode := COPYSTR("Parameter String",1,MAXSTRLEN(MailboxCode));
+            IF InnerRun THEN BEGIN
+              // Inner run started by RunIsolated (own instance, own CODEUNIT.RUN): poll one mailbox.
+              PollMailbox(MailboxCode);
+              EXIT;
+            END;
+            IF "Parameter String" = '' THEN BEGIN
+              PollAll;
+              EXIT;
+            END;
+            IF MailboxSetup.GET(MailboxCode) THEN
+              IF NOT MailboxSetup.Enabled THEN
+                EXIT;
+            // Only errors that need a change of the setup (add-in missing, required field blank, ...) end the job
+            // queue run with an error. A mailbox that cannot be read (token, throttling, network) does not, see
+            // PollMailbox: otherwise the recurring entry would stop after "Maximum No. of Attempts to Run".
+            IF NOT RunIsolated(MailboxCode) THEN
+              ERROR(FetchFailedErr,MailboxCode,RunErrorText);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      GraphMail@1000 : Codeunit 50400;
+      ObjectStorageMgt@1001 : Codeunit 50402;
+      FileManagement@1002 : Codeunit 419;
+      GraphConnection@1003 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphConnection";
+      ImportedCount@1004 : Integer;
+      FailedCount@1005 : Integer;
+      SkippedCount@1006 : Integer;
+      FirstErrorText@1007 : Text;
+      FetchErrorText@1008 : Text;
+      RunBusy@1009 : Boolean;
+      InnerRun@1030 : Boolean;
+      RunErrorText@1031 : Text;
+      TempWrittenObject@1032 : TEMPORARY Record 50402;
+      AddInMissingErr@1010 : TextConst 'DEU=Das Add-In NavMailGraph.dll (Version 1.0.0.0) kann auf dem Server nicht geladen werden. Kopieren Sie es in den Ordner Add-ins des Microsoft Dynamics NAV Servers, und starten Sie die Serverinstanz neu.;ENU=The add-in NavMailGraph.dll (version 1.0.0.0) cannot be loaded on the server. Copy it to the Add-ins folder of the Microsoft Dynamics NAV Server and restart the server instance.';
+      FetchFailedErr@1011 : TextConst 'DEU=Das Postfach %1 konnte nicht abgerufen werden: %2;ENU=Mailbox %1 could not be polled: %2';
+      MailsFailedErr@1012 : TextConst 'DEU=%1 E-Mail(s) im Postfach %2 sind fehlgeschlagen. Erster Fehler: %3;ENU=%1 e-mail(s) in mailbox %2 failed. First error: %3';
+      AttachmentFailedErr@1013 : TextConst 'DEU=Der Anhang %1 konnte nicht gespeichert werden: %2;ENU=Attachment %1 could not be saved: %2';
+      AttachmentListErr@1014 : TextConst 'DEU=Die E-Mail hat Anh„nge, aber die Anhangsliste konnte nicht geladen werden (Graph-Anforderungs-ID %1).;ENU=The e-mail has attachments, but the attachment list could not be loaded (Graph request ID %1).';
+      AttachmentLoadErr@1033 : TextConst 'DEU=Die Anhangsliste der E-Mail konnte nicht geladen werden: %1 (Graph-Anforderungs-ID %2).;ENU=The attachment list of the e-mail could not be loaded: %1 (Graph request ID %2).';
+      PollAllFailedErr@1015 : TextConst 'DEU=%1 Postfach/Postf„cher konnten nicht abgerufen werden. Letzter Fehler: %2;ENU=%1 mailbox(es) could not be polled. Last error: %2';
+      PollSummaryMsg@1016 : TextConst 'DEU=Postfach %1: %2 E-Mail(s) importiert, %3 fehlgeschlagen, %4 bersprungen.;ENU=Mailbox %1: %2 e-mail(s) imported, %3 failed, %4 skipped.';
+      StorageProfileMissingErr@1017 : TextConst 'DEU=Im Postfach %1 ist Ablage der Anh„nge = Objektspeicher, aber kein Speicherprofilcode angegeben.;ENU=Attachment Storage is Object Storage for mailbox %1, but no Storage Profile Code is entered.';
+      ConnectionOkMsg@1018 : TextConst 'DEU=Die Verbindung zum Postfach %1 war erfolgreich.\Ordner: %2\Ordner fr verarbeitete E-Mails: %3\Fehlerordner: %4;ENU=The connection to mailbox %1 succeeded.\Folder: %2\Processed folder: %3\Error folder: %4';
+      ConnectionFailedErr@1019 : TextConst 'DEU=Der Verbindungstest ist fehlgeschlagen: %1;ENU=The connection test failed: %1';
+      FolderFailedErr@1020 : TextConst 'DEU=Der Ordner %1 kann nicht verwendet werden: %2;ENU=The folder %1 cannot be used: %2';
+      JobScheduledMsg@1021 : TextConst 'DEU=Ein wiederkehrender Aufgabenwarteschlangenposten ruft das Postfach %1 alle %2 Minuten ab.;ENU=A recurring job queue entry polls mailbox %1 every %2 minutes.';
+      JobExistsMsg@1022 : TextConst 'DEU=Fr das Postfach %1 existiert bereits ein Aufgabenwarteschlangenposten. Sein Status ist Bereit.;ENU=A job queue entry for mailbox %1 already exists. Its status is Ready.';
+      JobDescriptionTxt@1023 : TextConst 'DEU=Graph-Postfach %1 abrufen;ENU=Poll Graph mailbox %1';
+      ResetSyncQst@1024 : TextConst 'DEU=M”chten Sie den Synchronisierungsstand des Postfachs %1 zurcksetzen? Der n„chste Abruf liest den Ordner erneut (bereits importierte E-Mails werden bersprungen).;ENU=Do you want to reset the synchronization state of mailbox %1? The next poll reads the folder again (e-mails that were already imported are skipped).';
+      UnknownErr@1025 : TextConst 'DEU=Unbekannter Fehler.;ENU=Unknown error.';
+      NotNowTxt@1026 : TextConst 'DEU=(nicht verwendet);ENU=(not used)';
+      PollBusyMsg@1027 : TextConst 'DEU=Das Postfach %1 wird gerade von einer anderen Sitzung abgerufen. Versuchen Sie es sp„ter erneut.;ENU=Mailbox %1 is being polled by another session right now. Try again later.';
+      JobRunningMsg@1028 : TextConst 'DEU=Der Aufgabenwarteschlangenposten fr das Postfach %1 wird gerade ausgefhrt. Sein Status wurde nicht ge„ndert.;ENU=The job queue entry for mailbox %1 is running right now. Its status was not changed.';
+      CopyActionFailedErr@1029 : TextConst 'DEU=Eine weitere Kopie der E-Mail %1 konnte im Postfach nicht verarbeitet werden: %2;ENU=Another copy of e-mail %1 could not be handled in the mailbox: %2';
+
+    PROCEDURE PollAll@1();
+    VAR
+      MailboxSetup@1000 : Record 50400;
+      TempMailboxSetup@1001 : TEMPORARY Record 50400;
+      MailboxCount@1002 : Integer;
+      FailedMailboxes@1003 : Integer;
+      LastErrorText@1004 : Text;
+    BEGIN
+      // Every enabled mailbox runs in its own CODEUNIT.RUN, so one failing mailbox does not stop the others.
+      MailboxSetup.SETRANGE(Enabled,TRUE);
+      IF MailboxSetup.FINDSET THEN
+        REPEAT
+          TempMailboxSetup := MailboxSetup;
+          TempMailboxSetup.INSERT;
+        UNTIL MailboxSetup.NEXT = 0;
+
+      IF TempMailboxSetup.FINDSET THEN
+        REPEAT
+          MailboxCount += 1;
+          IF NOT RunIsolated(TempMailboxSetup.Code) THEN BEGIN
+            FailedMailboxes += 1;
+            LastErrorText := RunErrorText;
+          END;
+        UNTIL TempMailboxSetup.NEXT = 0;
+
+      // A mailbox that cannot be read (token, throttling, network) is only recorded in its "Last Error" and
+      // "Consecutive Failures". The run ends with an error only when every mailbox failed with an error that needs
+      // a change of the setup (e.g. the add-in is missing), so that the job queue log (Table 474) shows it.
+      IF (FailedMailboxes > 0) AND (FailedMailboxes = MailboxCount) THEN
+        ERROR(PollAllFailedErr,FailedMailboxes,LastErrorText);
+    END;
+
+    PROCEDURE PollMailbox@2(MailboxCode@1000 : Code[20]);
+    VAR
+      MailboxSetup@1001 : Record 50400;
+      GraphMailbox@1002 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";
+      StorageClient@1003 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.ObjectStorageClient";
+      MailItem@1004 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailItem";
+      StorageReady@1005 : Boolean;
+      DeltaExpired@1006 : Boolean;
+      Result@1007 : Text;
+      DeltaLink@1008 : Text;
+      MessageCount@1009 : Integer;
+      i@1010 : Integer;
+    BEGIN
+      // Polls one mailbox. The run lock of the mailbox (AcquireRunLock) makes sure that only one session polls it at
+      // a time; when another session holds it, the run ends without doing anything (GetRunResult: Busy).
+      // Setup errors (add-in, required fields) raise an error. When the mailbox cannot be read (token, throttling,
+      // network, permissions) the error is saved in "Last Error" / "Consecutive Failures" and the run ends WITHOUT
+      // an error (GetRunResult: FetchError), so that a recurring job queue entry keeps polling.
+      // Problems with single e-mails are recorded on the e-mail (Status = Error) and do not stop the run.
+      ImportedCount := 0;
+      FailedCount := 0;
+      SkippedCount := 0;
+      FirstErrorText := '';
+      FetchErrorText := '';
+      RunBusy := FALSE;
+
+      MailboxSetup.GET(MailboxCode);
+      CreateGraphMailbox(MailboxSetup,GraphMailbox);
+      StorageReady := PrepareStorage(MailboxSetup,StorageClient);
+      IF NOT AcquireRunLock(MailboxCode) THEN BEGIN
+        RunBusy := TRUE;
+        EXIT;
+      END;
+      // Read the watermark again under the run lock: a run that ended a moment ago may have moved it.
+      MailboxSetup.GET(MailboxCode);
+      GraphMailbox.ReceivedAfter := GetWatermark(MailboxSetup);
+
+      IF MailboxSetup."Polling Mode" = MailboxSetup."Polling Mode"::"Delta Query" THEN BEGIN
+        DeltaLink := GetDeltaLink(MailboxSetup);
+        Result := GraphMailbox.FetchChanges(DeltaLink);
+        DeltaExpired := GraphMailbox.DeltaExpired;
+        IF (Result <> '') AND (DeltaLink <> '') AND DeltaExpired THEN BEGIN
+          // Graph evicted the sync state: start a new initial sync, bounded by the watermark (ReceivedAfter).
+          SetDeltaLink(MailboxSetup.Code,'');
+          Result := GraphMailbox.FetchChanges('');
+        END;
+      END ELSE
+        Result := GraphMailbox.Fetch;
+
+      IF Result <> '' THEN BEGIN
+        FetchErrorText := Result;
+        SaveFetchFailure(MailboxSetup.Code,Result);
+        COMMIT;
+        EXIT;
+      END;
+
+      // Mailbox actions that failed in an earlier run: Graph does not return these e-mails again (watermark).
+      RetryPendingActions(MailboxSetup,GraphMailbox);
+
+      MessageCount := GraphMailbox.Count;
+      FOR i := 0 TO MessageCount - 1 DO BEGIN
+        MailItem := GraphMailbox.GetMessage(i);
+        ProcessMessage(MailboxSetup,GraphMailbox,MailItem,StorageClient,StorageReady);
+      END;
+
+      // Removed entries of a delta response (GetRemovedId) need no action: the NAV record stays.
+      IF MailboxSetup."Polling Mode" = MailboxSetup."Polling Mode"::"Delta Query" THEN
+        SetDeltaLink(MailboxSetup.Code,GraphMailbox.NextDeltaLink);
+      FinishRun(MailboxSetup.Code);
+      COMMIT;
+    END;
+
+    PROCEDURE PollMailboxWithMessage@3(MailboxCode@1000 : Code[20]);
+    BEGIN
+      // Used by the page action "Poll Now" (also for a mailbox that is not enabled yet).
+      IF NOT RunIsolated(MailboxCode) THEN
+        ERROR(FetchFailedErr,MailboxCode,RunErrorText);
+      IF RunBusy THEN BEGIN
+        IF GUIALLOWED THEN
+          MESSAGE(PollBusyMsg,MailboxCode);
+        EXIT;
+      END;
+      IF FetchErrorText <> '' THEN
+        ERROR(FetchFailedErr,MailboxCode,FetchErrorText);
+      IF GUIALLOWED THEN
+        MESSAGE(PollSummaryMsg,MailboxCode,ImportedCount,FailedCount,SkippedCount);
+    END;
+
+    PROCEDURE GetLastRunCounts@4(VAR Imported@1000 : Integer;VAR Failed@1001 : Integer;VAR Skipped@1002 : Integer);
+    BEGIN
+      Imported := ImportedCount;
+      Failed := FailedCount;
+      Skipped := SkippedCount;
+    END;
+
+    PROCEDURE CreateGraphMailbox@5(VAR MailboxSetup@1000 : Record 50400;VAR GraphMailbox@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox");
+    BEGIN
+      // Maps Table 50400 (and the Graph credentials of Table 409) to NavMailGraph.GraphMailbox.
+      IF NOT CANLOADTYPE(GraphMailbox) THEN
+        ERROR(AddInMissingErr);
+      MailboxSetup.TESTFIELD(Mailbox);
+      GraphMail.CreateGraphConnection(GraphConnection);
+      CLEAR(GraphMailbox);
+      GraphMailbox := GraphMailbox.GraphMailbox(GraphConnection,MailboxSetup.Mailbox);
+      GraphMailbox.Folder := GetSourceFolder(MailboxSetup);
+      GraphMailbox.UnreadOnly := MailboxSetup."Unread Only";
+      IF MailboxSetup."Max. Mails per Run" > 0 THEN
+        GraphMailbox.MaxMessages := MailboxSetup."Max. Mails per Run";
+      GraphMailbox.IncludeBody := MailboxSetup."Import Body";
+      GraphMailbox.BodyAsText := MailboxSetup."Body as Text";
+      GraphMailbox.ReceivedAfter := GetWatermark(MailboxSetup);
+    END;
+
+    PROCEDURE ShowConnectionTest@6(VAR MailboxSetup@1000 : Record 50400);
+    VAR
+      GraphMailbox@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";
+      Result@1002 : Text;
+      ProcessedFolder@1003 : Text;
+      ErrorFolder@1004 : Text;
+    BEGIN
+      // Token, mailbox access and folders. With an After Import action other than Nothing, the processed
+      // and error folders are created when missing (needs Mail.ReadWrite).
+      CreateGraphMailbox(MailboxSetup,GraphMailbox);
+      Result := GraphConnection.TestConnection;
+      IF Result <> '' THEN
+        ERROR(ConnectionFailedErr,Result);
+      Result := GraphMailbox.EnsureFolder(GetSourceFolder(MailboxSetup));
+      IF Result <> '' THEN
+        ERROR(FolderFailedErr,GetSourceFolder(MailboxSetup),Result);
+      ProcessedFolder := NotNowTxt;
+      ErrorFolder := NotNowTxt;
+      IF MailboxSetup."After Import" <> MailboxSetup."After Import"::Nothing THEN BEGIN
+        ErrorFolder := GetErrorFolder(MailboxSetup);
+        Result := GraphMailbox.EnsureFolder(ErrorFolder);
+        IF Result <> '' THEN
+          ERROR(FolderFailedErr,ErrorFolder,Result);
+      END;
+      IF MailboxSetup."After Import" = MailboxSetup."After Import"::"Move to Processed Folder" THEN BEGIN
+        ProcessedFolder := GetProcessedFolder(MailboxSetup);
+        Result := GraphMailbox.EnsureFolder(ProcessedFolder);
+        IF Result <> '' THEN
+          ERROR(FolderFailedErr,ProcessedFolder,Result);
+      END;
+      MESSAGE(ConnectionOkMsg,MailboxSetup.Mailbox,GetSourceFolder(MailboxSetup),ProcessedFolder,ErrorFolder);
+    END;
+
+    PROCEDURE SchedulePolling@7(VAR MailboxSetup@1000 : Record 50400);
+    VAR
+      JobQueueEntry@1001 : Record 472;
+      JobQueueEnqueue@1002 : Codeunit 453;
+      Minutes@1003 : Integer;
+    BEGIN
+      // Creates a recurring Job Queue Entry (Parameter String = mailbox code) through
+      // Codeunit 453 "Job Queue - Enqueue".EnqueueJobQueueEntry (NAV 2016), like Table 472.ScheduleJobQueueEntry.
+      MailboxSetup.TESTFIELD(Code);
+      MailboxSetup.TESTFIELD(Mailbox);
+      JobQueueEntry.SETRANGE("Object Type to Run",JobQueueEntry."Object Type to Run"::Codeunit);
+      JobQueueEntry.SETRANGE("Object ID to Run",CODEUNIT::"Graph Mailbox Polling");
+      JobQueueEntry.SETRANGE("Parameter String",MailboxSetup.Code);
+      IF JobQueueEntry.FINDFIRST THEN BEGIN
+        // An entry that runs right now is left alone: SetStatus(Ready) would let the dispatcher start a second run,
+        // and the first one would then fail in Codeunit 451 (TESTFIELD Status = In Process).
+        IF JobQueueEntry.Status = JobQueueEntry.Status::"In Process" THEN BEGIN
+          MESSAGE(JobRunningMsg,MailboxSetup.Code);
+          EXIT;
+        END;
+        IF JobQueueEntry.Status <> JobQueueEntry.Status::Ready THEN
+          JobQueueEntry.SetStatus(JobQueueEntry.Status::Ready);
+        MESSAGE(JobExistsMsg,MailboxSetup.Code);
+        EXIT;
+      END;
+
+      Minutes := MailboxSetup."Polling Interval (Min.)";
+      IF Minutes <= 0 THEN
+        Minutes := 5;
+      JobQueueEntry.INIT;
+      JobQueueEntry.ID := CREATEGUID;
+      JobQueueEntry."Earliest Start Date/Time" := CREATEDATETIME(TODAY,TIME);
+      JobQueueEntry."Object Type to Run" := JobQueueEntry."Object Type to Run"::Codeunit;
+      JobQueueEntry."Object ID to Run" := CODEUNIT::"Graph Mailbox Polling";
+      JobQueueEntry."Parameter String" := MailboxSetup.Code;
+      JobQueueEntry."Record ID to Process" := MailboxSetup.RECORDID;
+      JobQueueEntry.Description := COPYSTR(STRSUBSTNO(JobDescriptionTxt,MailboxSetup.Code),1,MAXSTRLEN(JobQueueEntry.Description));
+      JobQueueEntry."Run in User Session" := FALSE;
+      JobQueueEntry."Recurring Job" := TRUE;
+      JobQueueEntry."Run on Mondays" := TRUE;
+      JobQueueEntry."Run on Tuesdays" := TRUE;
+      JobQueueEntry."Run on Wednesdays" := TRUE;
+      JobQueueEntry."Run on Thursdays" := TRUE;
+      JobQueueEntry."Run on Fridays" := TRUE;
+      JobQueueEntry."Run on Saturdays" := TRUE;
+      JobQueueEntry."Run on Sundays" := TRUE;
+      JobQueueEntry."No. of Minutes between Runs" := Minutes;
+      JobQueueEntry."Maximum No. of Attempts to Run" := 3;
+      JobQueueEntry."Rerun Delay (sec.)" := 60;
+      JobQueueEntry.Priority := 1000;
+      JobQueueEnqueue.EnqueueJobQueueEntry(JobQueueEntry,TRUE);
+      MESSAGE(JobScheduledMsg,MailboxSetup.Code,Minutes);
+    END;
+
+    PROCEDURE ResetSyncState@8(VAR MailboxSetup@1000 : Record 50400);
+    BEGIN
+      // Clears watermark and delta link. Already imported e-mails are skipped by the duplicate check.
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(ResetSyncQst,FALSE,MailboxSetup.Code) THEN
+          EXIT;
+      MailboxSetup.GET(MailboxSetup.Code);
+      MailboxSetup."Last Received (Text)" := '';
+      MailboxSetup."Last Received At" := 0DT;
+      CLEAR(MailboxSetup."Delta Link");
+      MailboxSetup.MODIFY;
+    END;
+
+    PROCEDURE RunSubscribers@9(VAR InboundMail@1000 : Record 50401) : Boolean;
+    VAR
+      Runner@1001 : Codeunit 50404;
+      ErrorText@1002 : Text;
+    BEGIN
+      // Raises OnAfterImportMail in its own transaction (Codeunit 50404). A failing subscriber rolls back
+      // only its own changes; the e-mail gets Status = Error and the error text.
+      COMMIT;
+      CLEARLASTERROR;
+      IF Runner.RUN(InboundMail) THEN BEGIN
+        COMMIT;
+        EXIT(TRUE);
+      END;
+      ErrorText := GetErrorText;
+      InboundMail.GET(InboundMail."Entry No.");
+      InboundMail.Status := InboundMail.Status::Error;
+      InboundMail."Error Text" := COPYSTR(ErrorText,1,MAXSTRLEN(InboundMail."Error Text"));
+      InboundMail."Subscribers Run" := TRUE;
+      InboundMail.MODIFY;
+      COMMIT;
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE ApplyMailboxAction@10(VAR MailboxSetup@1000 : Record 50400;VAR GraphMailbox@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";VAR InboundMail@1002 : Record 50401;MessageId@1003 : Text) : Boolean;
+    VAR
+      NewAction@1004 : Integer;
+      TargetFolder@1005 : Text;
+      NewMessageId@1006 : Text;
+      Result@1007 : Text;
+    BEGIN
+      // After Import action in the mailbox. Failed e-mails go to the error folder (except in mode Nothing).
+      // Returns FALSE when Graph refused the action; the e-mail record keeps the error, the run continues, and the
+      // next polls retry the action (RetryPendingActions, up to 5 attempts).
+      IF MessageId = '' THEN
+        MessageId := InboundMail."Graph Message ID";
+      Result :=
+        DoMailboxAction(
+          MailboxSetup,GraphMailbox,InboundMail.Status = InboundMail.Status::Error,MessageId,NewAction,TargetFolder);
+
+      IF Result = '' THEN BEGIN
+        InboundMail."Mailbox Action" := NewAction;
+        InboundMail."Mailbox Action Error" := '';
+        InboundMail."Mailbox Action Attempts" := 0;
+        IF NewAction = InboundMail."Mailbox Action"::Moved THEN BEGIN
+          InboundMail."Current Folder" := COPYSTR(TargetFolder,1,MAXSTRLEN(InboundMail."Current Folder"));
+          // Immutable ids do not change on a move; keep whatever Graph reports.
+          NewMessageId := GraphMailbox.LastMovedMessageId;
+          IF NewMessageId <> '' THEN
+            InboundMail."Graph Message ID" := COPYSTR(NewMessageId,1,MAXSTRLEN(InboundMail."Graph Message ID"));
+        END;
+      END ELSE BEGIN
+        InboundMail."Mailbox Action" := InboundMail."Mailbox Action"::Failed;
+        InboundMail."Mailbox Action Error" := COPYSTR(Result,1,MAXSTRLEN(InboundMail."Mailbox Action Error"));
+        InboundMail."Mailbox Action Attempts" += 1;
+      END;
+      InboundMail.MODIFY;
+      EXIT(Result = '');
+    END;
+
+    PROCEDURE ImportMessage@11(VAR InboundMail@1000 : Record 50401;MailboxSetup@1001 : Record 50400;GraphMailbox@1002 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";MailItem@1003 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailItem";StorageClient@1004 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.ObjectStorageClient";StorageReady@1005 : Boolean);
+    VAR
+      AttachmentInfo@1006 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailAttachmentInfo";
+      Skip@1007 : Boolean;
+      HasAttachments@1008 : Boolean;
+      AttachmentCount@1009 : Integer;
+      MessageId@1010 : Text;
+      RequestId@1012 : Text;
+      LoadResult@1013 : Text;
+      i@1011 : Integer;
+    BEGIN
+      // Internal: called by Codeunit 50404 inside CODEUNIT.RUN, so an error rolls back everything written here.
+      // InboundMail."Entry No." = 0 afterwards means a subscriber of OnBeforeImportMail skipped the e-mail.
+      // TempWrittenObject collects the object keys / server files written for this e-mail (GetWrittenObjects).
+      TempWrittenObject.RESET;
+      TempWrittenObject.DELETEALL;
+      CLEAR(InboundMail);
+      OnBeforeImportMail(MailboxSetup,MailItem,Skip);
+      IF Skip THEN
+        EXIT;
+
+      MessageId := MailItem.Id;
+      InboundMail.INIT;
+      FillHeader(InboundMail,MailboxSetup,MailItem);
+      InboundMail.Status := InboundMail.Status::Imported;
+      IF MailboxSetup."Import Body" THEN
+        WriteBody(InboundMail,MailItem);
+      InboundMail.INSERT(TRUE);
+
+      // Load the attachment metadata explicitly (no content in this call). LoadAttachments returns '' or an
+      // error text; AttachmentCount alone returns -1 on failure and must not be used for error detection.
+      LoadResult := MailItem.LoadAttachments;
+      IF LoadResult <> '' THEN BEGIN
+        RequestId := GraphMailbox.LastRequestId;
+        ERROR(AttachmentLoadErr,LoadResult,RequestId);
+      END;
+      AttachmentCount := MailItem.AttachmentCount;
+      HasAttachments := MailItem.HasAttachments;
+      IF HasAttachments AND (AttachmentCount <= 0) THEN BEGIN
+        RequestId := GraphMailbox.LastRequestId;
+        ERROR(AttachmentListErr,RequestId);
+      END;
+      FOR i := 0 TO AttachmentCount - 1 DO BEGIN
+        AttachmentInfo := MailItem.GetAttachment(i);
+        ImportAttachment(InboundMail,MailboxSetup,GraphMailbox,AttachmentInfo,MessageId,StorageClient,StorageReady);
+      END;
+    END;
+
+    PROCEDURE GetDeltaLink@12(VAR MailboxSetup@1000 : Record 50400) : Text;
+    VAR
+      InStr@1001 : InStream;
+      Part@1002 : Text;
+      DeltaLink@1003 : Text;
+    BEGIN
+      MailboxSetup.CALCFIELDS("Delta Link");
+      IF NOT MailboxSetup."Delta Link".HASVALUE THEN
+        EXIT('');
+      MailboxSetup."Delta Link".CREATEINSTREAM(InStr);
+      WHILE NOT InStr.EOS DO BEGIN
+        InStr.READTEXT(Part);
+        DeltaLink += Part;
+      END;
+      EXIT(DeltaLink);
+    END;
+
+    PROCEDURE SetDeltaLink@13(MailboxCode@1000 : Code[20];DeltaLink@1001 : Text);
+    VAR
+      MailboxSetup@1002 : Record 50400;
+      OutStr@1003 : OutStream;
+    BEGIN
+      // The delta link is an opaque URL (ASCII), stored unchanged in a BLOB.
+      MailboxSetup.GET(MailboxCode);
+      CLEAR(MailboxSetup."Delta Link");
+      IF DeltaLink <> '' THEN BEGIN
+        MailboxSetup."Delta Link".CREATEOUTSTREAM(OutStr);
+        OutStr.WRITETEXT(DeltaLink);
+      END;
+      MailboxSetup.MODIFY;
+    END;
+
+    PROCEDURE LowerWatermark@14(MailboxCode@1000 : Code[20];ReceivedText@1001 : Text);
+    VAR
+      MailboxSetup@1002 : Record 50400;
+    BEGIN
+      // Used by Reprocess (Codeunit 50403) so that an e-mail moved back to the source folder is read again.
+      IF ReceivedText = '' THEN
+        EXIT;
+      MailboxSetup.GET(MailboxCode);
+      IF (MailboxSetup."Last Received (Text)" = '') OR (MailboxSetup."Last Received (Text)" <= ReceivedText) THEN
+        EXIT;
+      MailboxSetup."Last Received (Text)" := COPYSTR(ReceivedText,1,MAXSTRLEN(MailboxSetup."Last Received (Text)"));
+      IF NOT EVALUATE(MailboxSetup."Last Received At",ReceivedText,9) THEN
+        MailboxSetup."Last Received At" := 0DT;
+      MailboxSetup.MODIFY;
+    END;
+
+    PROCEDURE GetSourceFolder@15(MailboxSetup@1000 : Record 50400) : Text;
+    BEGIN
+      IF MailboxSetup.Folder = '' THEN
+        EXIT('Inbox');
+      EXIT(MailboxSetup.Folder);
+    END;
+
+    PROCEDURE GetProcessedFolder@16(MailboxSetup@1000 : Record 50400) : Text;
+    BEGIN
+      // Folder names are not translated: they are names in the Exchange mailbox.
+      IF MailboxSetup."Processed Folder" <> '' THEN
+        EXIT(MailboxSetup."Processed Folder");
+      EXIT(GetSourceFolder(MailboxSetup) + '/Processed');
+    END;
+
+    PROCEDURE GetErrorFolder@17(MailboxSetup@1000 : Record 50400) : Text;
+    BEGIN
+      IF MailboxSetup."Error Folder" <> '' THEN
+        EXIT(MailboxSetup."Error Folder");
+      EXIT(GetSourceFolder(MailboxSetup) + '/Error');
+    END;
+
+    LOCAL PROCEDURE ProcessMessage@20(VAR MailboxSetup@1000 : Record 50400;VAR GraphMailbox@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";VAR MailItem@1002 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailItem";VAR StorageClient@1003 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.ObjectStorageClient";StorageReady@1004 : Boolean);
+    VAR
+      InboundMail@1005 : Record 50401;
+      Runner@1006 : Codeunit 50404;
+      GraphMessageId@1007 : Text;
+      InternetMessageId@1008 : Text;
+      ReceivedText@1009 : Text;
+      ErrorText@1010 : Text;
+      SameMessage@1011 : Boolean;
+    BEGIN
+      GraphMessageId := MailItem.Id;
+      InternetMessageId := MailItem.InternetMessageId;
+      ReceivedText := MailItem.ReceivedText;
+
+      IF FindImportedMail(MailboxSetup.Code,GraphMessageId,InternetMessageId,InboundMail,SameMessage) THEN BEGIN
+        IF SameMessage THEN
+          // Already imported (inclusive watermark, delta replay, or a run that stopped after the import):
+          // finish what is missing (subscribers, mailbox action).
+          CompleteImportedMail(MailboxSetup,GraphMailbox,InboundMail,GraphMessageId)
+        ELSE
+          // Another copy of an imported e-mail (same internetMessageId, other Graph message, e.g. delivered again
+          // through an alias or a distribution list): only the copy gets the mailbox action; the existing record
+          // keeps its Graph Message ID and Mailbox Action.
+          HandleCopyOfImportedMail(MailboxSetup,GraphMailbox,InboundMail,GraphMessageId);
+        UpdateWatermark(MailboxSetup.Code,ReceivedText);
+        COMMIT;
+        EXIT;
+      END;
+
+      // Step 1: header, body and attachments in one isolated transaction (COMMIT per e-mail).
+      COMMIT;
+      CLEAR(InboundMail);
+      Runner.SetImportContext(MailboxSetup,GraphMailbox,MailItem,StorageClient,StorageReady);
+      CLEARLASTERROR;
+      IF NOT Runner.RUN(InboundMail) THEN BEGIN
+        ErrorText := GetErrorText;
+        // The rollback does not remove what was already uploaded / written for this attempt.
+        DeleteWrittenObjects(Runner,StorageClient,StorageReady);
+        InsertFailedImport(MailboxSetup,MailItem,ErrorText,InboundMail);
+        RegisterFailure(ErrorText);
+      END ELSE BEGIN
+        IF InboundMail."Entry No." = 0 THEN BEGIN
+          // Skipped by an OnBeforeImportMail subscriber: no record, no mailbox action.
+          SkippedCount += 1;
+          UpdateWatermark(MailboxSetup.Code,ReceivedText);
+          COMMIT;
+          EXIT;
+        END;
+        ImportedCount += 1;
+        // Step 2: subscribers (OnAfterImportMail) in their own transaction.
+        IF NOT RunSubscribers(InboundMail) THEN
+          RegisterFailure(InboundMail."Error Text");
+      END;
+
+      IF NOT ApplyMailboxAction(MailboxSetup,GraphMailbox,InboundMail,GraphMessageId) THEN
+        RegisterFailure(InboundMail."Mailbox Action Error");
+      UpdateWatermark(MailboxSetup.Code,ReceivedText);
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE FindImportedMail@21(MailboxCode@1000 : Code[20];GraphMessageId@1001 : Text;InternetMessageId@1002 : Text;VAR InboundMail@1003 : Record 50401;VAR SameMessage@1004 : Boolean) : Boolean;
+    BEGIN
+      // Text filters are case-insensitive on SQL Server; Graph ids are case-sensitive, so compare exactly.
+      // SameMessage = TRUE: found by Graph id (this message); FALSE: found by internetMessageId (another copy).
+      SameMessage := TRUE;
+      InboundMail.RESET;
+      InboundMail.SETCURRENTKEY("Mailbox Code","Graph Message ID");
+      InboundMail.SETRANGE("Mailbox Code",MailboxCode);
+      InboundMail.SETRANGE("Graph Message ID",COPYSTR(GraphMessageId,1,MAXSTRLEN(InboundMail."Graph Message ID")));
+      IF InboundMail.FINDSET THEN
+        REPEAT
+          IF InboundMail."Graph Message ID" = COPYSTR(GraphMessageId,1,MAXSTRLEN(InboundMail."Graph Message ID")) THEN
+            EXIT(TRUE);
+        UNTIL InboundMail.NEXT = 0;
+
+      SameMessage := FALSE;
+      IF InternetMessageId = '' THEN
+        EXIT(FALSE);
+      InboundMail.RESET;
+      InboundMail.SETCURRENTKEY("Mailbox Code","Internet Message ID");
+      InboundMail.SETRANGE("Mailbox Code",MailboxCode);
+      InboundMail.SETRANGE("Internet Message ID",COPYSTR(InternetMessageId,1,MAXSTRLEN(InboundMail."Internet Message ID")));
+      IF InboundMail.FINDSET THEN
+        REPEAT
+          IF InboundMail."Internet Message ID" = COPYSTR(InternetMessageId,1,MAXSTRLEN(InboundMail."Internet Message ID")) THEN
+            EXIT(TRUE);
+        UNTIL InboundMail.NEXT = 0;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE InsertFailedImport@22(VAR MailboxSetup@1000 : Record 50400;VAR MailItem@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailItem";ErrorText@1002 : Text;VAR InboundMail@1003 : Record 50401);
+    BEGIN
+      // Header only, so the failure is visible in NAV and the e-mail is not imported twice.
+      // Reprocess (Codeunit 50403) deletes this record and queues the e-mail for a new import.
+      CLEAR(InboundMail);
+      InboundMail.INIT;
+      FillHeader(InboundMail,MailboxSetup,MailItem);
+      InboundMail.Status := InboundMail.Status::Error;
+      InboundMail."Import Failed" := TRUE;
+      InboundMail."Error Text" := COPYSTR(ErrorText,1,MAXSTRLEN(InboundMail."Error Text"));
+      InboundMail.INSERT(TRUE);
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE FillHeader@23(VAR InboundMail@1000 : Record 50401;VAR MailboxSetup@1001 : Record 50400;VAR MailItem@1002 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailItem");
+    VAR
+      OutStr@1003 : OutStream;
+      ReceivedText@1004 : Text;
+      SentText@1005 : Text;
+      WebLink@1006 : Text;
+    BEGIN
+      InboundMail."Mailbox Code" := MailboxSetup.Code;
+      InboundMail."Graph Message ID" := CutText(MailItem.Id,MAXSTRLEN(InboundMail."Graph Message ID"));
+      InboundMail."Internet Message ID" := CutText(MailItem.InternetMessageId,MAXSTRLEN(InboundMail."Internet Message ID"));
+      InboundMail."Conversation ID" := CutText(MailItem.ConversationId,MAXSTRLEN(InboundMail."Conversation ID"));
+      InboundMail.Subject := CutText(MailItem.Subject,MAXSTRLEN(InboundMail.Subject));
+      InboundMail."From Address" := CutText(MailItem.FromAddress,MAXSTRLEN(InboundMail."From Address"));
+      InboundMail."From Name" := CutText(MailItem.FromName,MAXSTRLEN(InboundMail."From Name"));
+      InboundMail."Sender Address" := CutText(MailItem.SenderAddress,MAXSTRLEN(InboundMail."Sender Address"));
+      InboundMail."To Recipients" := CutText(MailItem.ToRecipients,MAXSTRLEN(InboundMail."To Recipients"));
+      InboundMail."Cc Recipients" := CutText(MailItem.CcRecipients,MAXSTRLEN(InboundMail."Cc Recipients"));
+      InboundMail."Reply-To" := CutText(MailItem.ReplyTo,MAXSTRLEN(InboundMail."Reply-To"));
+      InboundMail.Importance := CutText(MailItem.Importance,MAXSTRLEN(InboundMail.Importance));
+      InboundMail."Body Preview" := CutText(MailItem.BodyPreview,MAXSTRLEN(InboundMail."Body Preview"));
+      InboundMail."Is Read" := MailItem.IsRead;
+      InboundMail."Has Attachments" := MailItem.HasAttachments;
+      InboundMail."Body Is HTML" := MailItem.BodyIsHtml;
+
+      // The ISO 8601 text from Graph is authoritative (watermark); the DateTime fields are for display/sorting.
+      ReceivedText := MailItem.ReceivedText;
+      InboundMail."Received (Text)" := CutText(ReceivedText,MAXSTRLEN(InboundMail."Received (Text)"));
+      IF NOT EVALUATE(InboundMail."Received At",ReceivedText,9) THEN
+        InboundMail."Received At" := 0DT;
+      SentText := MailItem.SentText;
+      IF NOT EVALUATE(InboundMail."Sent At",SentText,9) THEN
+        InboundMail."Sent At" := 0DT;
+
+      WebLink := MailItem.WebLink;
+      IF WebLink <> '' THEN BEGIN
+        InboundMail."Web Link".CREATEOUTSTREAM(OutStr);
+        OutStr.WRITETEXT(WebLink);
+      END;
+      InboundMail."Current Folder" := COPYSTR(GetSourceFolder(MailboxSetup),1,MAXSTRLEN(InboundMail."Current Folder"));
+      InboundMail."Imported At" := CURRENTDATETIME;
+      InboundMail."Imported By" := COPYSTR(USERID,1,MAXSTRLEN(InboundMail."Imported By"));
+    END;
+
+    LOCAL PROCEDURE WriteBody@24(VAR InboundMail@1000 : Record 50401;VAR MailItem@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailItem");
+    VAR
+      OutStr@1002 : OutStream;
+      Body@1003 : Text;
+    BEGIN
+      // UTF-8, so that any character of the e-mail survives (the default BLOB text encoding is the OEM code page).
+      Body := MailItem.Body;
+      IF Body = '' THEN
+        EXIT;
+      InboundMail.Body.CREATEOUTSTREAM(OutStr,TEXTENCODING::UTF8);
+      OutStr.WRITETEXT(Body);
+    END;
+
+    LOCAL PROCEDURE ImportAttachment@25(VAR InboundMail@1000 : Record 50401;VAR MailboxSetup@1001 : Record 50400;VAR GraphMailbox@1002 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";VAR AttachmentInfo@1003 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailAttachmentInfo";MessageId@1004 : Text;VAR StorageClient@1005 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.ObjectStorageClient";StorageReady@1006 : Boolean);
+    VAR
+      InboundAttachment@1007 : Record 50402;
+      OutStr@1008 : OutStream;
+      AttachmentId@1009 : Text;
+      Kind@1010 : Text;
+      FileName@1011 : Text;
+      ObjectKey@1012 : Text;
+      FilePath@1013 : Text;
+      Result@1014 : Text;
+      Size@1015 : BigInteger;
+      IsInline@1016 : Boolean;
+    BEGIN
+      IsInline := AttachmentInfo.IsInline;
+      IF IsInline AND MailboxSetup."Skip Inline Images" THEN
+        EXIT;
+      AttachmentId := AttachmentInfo.Id;
+      Kind := AttachmentInfo.Kind;
+      Kind := LOWERCASE(Kind);
+      Size := AttachmentInfo.Size;
+      FileName := AttachmentInfo.SuggestedFileName;
+      IF FileName = '' THEN
+        FileName := AttachmentInfo.Name;
+      FileName := FileManagement.StripNotsupportChrInFileName(FileName);
+      IF FileName = '' THEN
+        FileName := 'attachment';
+
+      InboundAttachment.INIT;
+      InboundAttachment."Mail Entry No." := InboundMail."Entry No.";
+      InboundAttachment."Mailbox Code" := InboundMail."Mailbox Code";
+      InboundAttachment."Graph Attachment ID" := CutText(AttachmentId,MAXSTRLEN(InboundAttachment."Graph Attachment ID"));
+      InboundAttachment.Name := CutText(AttachmentInfo.Name,MAXSTRLEN(InboundAttachment.Name));
+      InboundAttachment."File Name" := CutTextKeepEnd(FileName,100);
+      InboundAttachment."Content Type" := CutText(AttachmentInfo.ContentType,MAXSTRLEN(InboundAttachment."Content Type"));
+      InboundAttachment."Content ID" := CutText(AttachmentInfo.ContentId,MAXSTRLEN(InboundAttachment."Content ID"));
+      InboundAttachment.Size := Size;
+      InboundAttachment."Is Inline" := IsInline;
+      CASE Kind OF
+        'item':
+          InboundAttachment.Kind := InboundAttachment.Kind::Item;
+        'reference':
+          InboundAttachment.Kind := InboundAttachment.Kind::Reference;
+        ELSE
+          InboundAttachment.Kind := InboundAttachment.Kind::File;
+      END;
+      InboundAttachment.Status := InboundAttachment.Status::Pending;
+      InboundAttachment."Created At" := CURRENTDATETIME;
+      InboundAttachment.INSERT(TRUE);
+
+      IF InboundAttachment.Kind = InboundAttachment.Kind::Reference THEN BEGIN
+        // Cloud links have no content (Graph returns 405 for $value): metadata only.
+        InboundAttachment.Status := InboundAttachment.Status::"Skipped (Link)";
+        InboundAttachment.MODIFY;
+        OnAfterImportAttachment(InboundAttachment);
+        EXIT;
+      END;
+
+      InboundAttachment."Storage Location" := ChooseStorageLocation(MailboxSetup,Size,StorageReady);
+      CASE InboundAttachment."Storage Location" OF
+        InboundAttachment."Storage Location"::"Database (BLOB)":
+          BEGIN
+            // The add-in streams Graph $value directly into the BLOB stream (no base64, no temp file).
+            InboundAttachment.Content.CREATEOUTSTREAM(OutStr);
+            Result := GraphMailbox.SaveAttachmentToStream(MessageId,AttachmentId,OutStr);
+          END;
+        InboundAttachment."Storage Location"::"Object Storage":
+          BEGIN
+            // Streamed from Graph to Azure Blob / S3 by the add-in; nothing passes through NAV.
+            ObjectKey := BuildObjectKey(InboundMail,InboundAttachment);
+            RememberWrittenObject(InboundAttachment."Storage Location",ObjectKey);
+            Result := GraphMailbox.CopyAttachmentToStorage(MessageId,AttachmentId,StorageClient,ObjectKey);
+            IF Result = '' THEN BEGIN
+              InboundAttachment."Storage Profile Code" := MailboxSetup."Storage Profile Code";
+              InboundAttachment."Object Key" := COPYSTR(ObjectKey,1,MAXSTRLEN(InboundAttachment."Object Key"));
+              InboundAttachment."Storage ETag" := CutText(GraphMailbox.LastStorageETag,MAXSTRLEN(InboundAttachment."Storage ETag"));
+              InboundAttachment."Stored Size" := GraphMailbox.LastStorageSize;
+            END;
+          END;
+        InboundAttachment."Storage Location"::"Server Folder":
+          BEGIN
+            FilePath := BuildServerFilePath(MailboxSetup,InboundMail,InboundAttachment);
+            FileManagement.ServerCreateDirectory(FileManagement.GetDirectoryName(FilePath));
+            RememberWrittenObject(InboundAttachment."Storage Location",FilePath);
+            Result := GraphMailbox.SaveAttachmentToFile(MessageId,AttachmentId,FilePath);
+            IF Result = '' THEN
+              InboundAttachment."Server File Path" := COPYSTR(FilePath,1,MAXSTRLEN(InboundAttachment."Server File Path"));
+          END;
+      END;
+      IF Result <> '' THEN
+        ERROR(AttachmentFailedErr,InboundAttachment."File Name",Result);
+
+      IF InboundAttachment."Storage Location" = InboundAttachment."Storage Location"::" " THEN
+        InboundAttachment.Status := InboundAttachment.Status::"Skipped (Too Large)"
+      ELSE
+        InboundAttachment.Status := InboundAttachment.Status::Stored;
+      InboundAttachment.MODIFY;
+      OnAfterImportAttachment(InboundAttachment);
+    END;
+
+    LOCAL PROCEDURE ChooseStorageLocation@26(VAR MailboxSetup@1000 : Record 50400;Size@1001 : BigInteger;StorageReady@1002 : Boolean) : Integer;
+    VAR
+      InboundAttachment@1003 : Record 50402;
+      LimitBytes@1004 : BigInteger;
+    BEGIN
+      // Database (BLOB): up to "Max. BLOB Size (KB)" (0 = no limit) in the BLOB, larger ones to object storage
+      // when a Storage Profile Code is set, otherwise metadata only (Status Skipped (Too Large)).
+      CASE MailboxSetup."Attachment Storage" OF
+        MailboxSetup."Attachment Storage"::"Object Storage":
+          EXIT(InboundAttachment."Storage Location"::"Object Storage");
+        MailboxSetup."Attachment Storage"::"Server Folder":
+          EXIT(InboundAttachment."Storage Location"::"Server Folder");
+      END;
+      LimitBytes := MailboxSetup."Max. BLOB Size (KB)";
+      LimitBytes := LimitBytes * 1024;
+      IF (LimitBytes <= 0) OR (Size <= LimitBytes) THEN
+        EXIT(InboundAttachment."Storage Location"::"Database (BLOB)");
+      IF StorageReady THEN
+        EXIT(InboundAttachment."Storage Location"::"Object Storage");
+      EXIT(InboundAttachment."Storage Location"::" ");
+    END;
+
+    LOCAL PROCEDURE BuildObjectKey@27(VAR InboundMail@1000 : Record 50401;VAR InboundAttachment@1001 : Record 50402) : Text;
+    VAR
+      KeyPath@1002 : Text;
+      ReceivedDate@1003 : Date;
+    BEGIN
+      // {mailbox code}/{yyyy}/{MM}/{dd}/{mail entry no}/{file name}; the Key Prefix of the profile is added by the add-in.
+      IF InboundMail."Received At" = 0DT THEN
+        ReceivedDate := TODAY
+      ELSE
+        ReceivedDate := DT2DATE(InboundMail."Received At");
+      KeyPath :=
+        DELCHR(InboundMail."Mailbox Code",'=','/\') + '/' + FORMAT(ReceivedDate,0,'<Year4>/<Month,2>/<Day,2>') + '/' +
+        FORMAT(InboundMail."Entry No.",0,9) + '/';
+      EXIT(KeyPath + CutTextKeepEnd(GetUniqueFileName(InboundAttachment),250 - STRLEN(KeyPath)));
+    END;
+
+    LOCAL PROCEDURE BuildServerFilePath@28(VAR MailboxSetup@1000 : Record 50400;VAR InboundMail@1001 : Record 50401;VAR InboundAttachment@1002 : Record 50402) : Text;
+    VAR
+      FolderPath@1003 : Text;
+      ReceivedDate@1004 : Date;
+    BEGIN
+      MailboxSetup.TESTFIELD("Server Folder Path");
+      IF InboundMail."Received At" = 0DT THEN
+        ReceivedDate := TODAY
+      ELSE
+        ReceivedDate := DT2DATE(InboundMail."Received At");
+      FolderPath :=
+        DELCHR(MailboxSetup."Server Folder Path",'>','\') + '\' + DELCHR(InboundMail."Mailbox Code",'=','/\:*?"<>|') + '\' +
+        FORMAT(ReceivedDate,0,'<Year4>\<Month,2>') + '\' + FORMAT(InboundMail."Entry No.",0,9) + '\';
+      EXIT(FolderPath + CutTextKeepEnd(GetUniqueFileName(InboundAttachment),250 - STRLEN(FolderPath)));
+    END;
+
+    LOCAL PROCEDURE GetUniqueFileName@29(VAR InboundAttachment@1000 : Record 50402) : Text;
+    VAR
+      OtherAttachment@1001 : Record 50402;
+    BEGIN
+      // Two attachments of one e-mail may have the same name: the later one gets its entry number as prefix.
+      OtherAttachment.SETRANGE("Mail Entry No.",InboundAttachment."Mail Entry No.");
+      OtherAttachment.SETRANGE("File Name",InboundAttachment."File Name");
+      OtherAttachment.SETFILTER("Entry No.",'<%1',InboundAttachment."Entry No.");
+      IF OtherAttachment.ISEMPTY THEN
+        EXIT(InboundAttachment."File Name");
+      EXIT(FORMAT(InboundAttachment."Entry No.",0,9) + '_' + InboundAttachment."File Name");
+    END;
+
+    LOCAL PROCEDURE PrepareStorage@30(VAR MailboxSetup@1000 : Record 50400;VAR StorageClient@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.ObjectStorageClient") : Boolean;
+    BEGIN
+      IF (MailboxSetup."Attachment Storage" = MailboxSetup."Attachment Storage"::"Object Storage") AND
+         (MailboxSetup."Storage Profile Code" = '')
+      THEN
+        ERROR(StorageProfileMissingErr,MailboxSetup.Code);
+      IF MailboxSetup."Attachment Storage" = MailboxSetup."Attachment Storage"::"Server Folder" THEN
+        MailboxSetup.TESTFIELD("Server Folder Path");
+      IF MailboxSetup."Storage Profile Code" = '' THEN
+        EXIT(FALSE);
+      ObjectStorageMgt.CreateClient(MailboxSetup."Storage Profile Code",StorageClient);
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetWatermark@31(VAR MailboxSetup@1000 : Record 50400) : Text;
+    BEGIN
+      // Inclusive watermark (receivedDateTime ge ...): the exact Graph text of the newest imported e-mail.
+      IF MailboxSetup."Last Received (Text)" <> '' THEN
+        EXIT(MailboxSetup."Last Received (Text)");
+      IF MailboxSetup."Import From Date" <> 0D THEN
+        EXIT(FORMAT(CREATEDATETIME(MailboxSetup."Import From Date",0T),0,9));
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE UpdateWatermark@32(MailboxCode@1000 : Code[20];ReceivedText@1001 : Text);
+    VAR
+      MailboxSetup@1002 : Record 50400;
+    BEGIN
+      IF ReceivedText = '' THEN
+        EXIT;
+      MailboxSetup.GET(MailboxCode);
+      IF MailboxSetup."Last Received (Text)" >= ReceivedText THEN
+        EXIT;
+      MailboxSetup."Last Received (Text)" := COPYSTR(ReceivedText,1,MAXSTRLEN(MailboxSetup."Last Received (Text)"));
+      IF NOT EVALUATE(MailboxSetup."Last Received At",ReceivedText,9) THEN
+        MailboxSetup."Last Received At" := 0DT;
+      MailboxSetup.MODIFY;
+    END;
+
+    LOCAL PROCEDURE FinishRun@33(MailboxCode@1000 : Code[20]);
+    VAR
+      MailboxSetup@1001 : Record 50400;
+    BEGIN
+      MailboxSetup.GET(MailboxCode);
+      MailboxSetup."Last Poll At" := CURRENTDATETIME;
+      MailboxSetup."Last Run Imported" := ImportedCount;
+      MailboxSetup."Last Run Errors" := FailedCount;
+      IF FailedCount > 0 THEN
+        MailboxSetup."Last Error" :=
+          COPYSTR(STRSUBSTNO(MailsFailedErr,FailedCount,MailboxCode,FirstErrorText),1,MAXSTRLEN(MailboxSetup."Last Error"))
+      ELSE
+        MailboxSetup."Last Error" := '';
+      MailboxSetup."Consecutive Failures" := 0;
+      ReleaseRunLock(MailboxSetup);
+      MailboxSetup.MODIFY;
+    END;
+
+    LOCAL PROCEDURE SaveMailboxError@34(MailboxCode@1000 : Code[20];ErrorText@1001 : Text);
+    VAR
+      MailboxSetup@1002 : Record 50400;
+    BEGIN
+      // After an error in RunIsolated: the inner run was rolled back, but its run lock was committed.
+      IF NOT MailboxSetup.GET(MailboxCode) THEN
+        EXIT;
+      MailboxSetup."Last Poll At" := CURRENTDATETIME;
+      MailboxSetup."Last Error" := COPYSTR(ErrorText,1,MAXSTRLEN(MailboxSetup."Last Error"));
+      ReleaseRunLock(MailboxSetup);
+      MailboxSetup.MODIFY;
+    END;
+
+    LOCAL PROCEDURE RegisterFailure@35(ErrorText@1000 : Text);
+    BEGIN
+      FailedCount += 1;
+      IF FirstErrorText = '' THEN
+        FirstErrorText := ErrorText;
+    END;
+
+    LOCAL PROCEDURE GetErrorText@36() : Text;
+    VAR
+      ErrorText@1000 : Text;
+    BEGIN
+      ErrorText := GETLASTERRORTEXT;
+      IF ErrorText = '' THEN
+        ErrorText := UnknownErr;
+      EXIT(ErrorText);
+    END;
+
+    LOCAL PROCEDURE CutText@37(Value@1000 : Text;MaxLength@1001 : Integer) : Text;
+    BEGIN
+      // Also converts a .NET System.String (DotNet property) to C/AL Text.
+      EXIT(COPYSTR(Value,1,MaxLength));
+    END;
+
+    LOCAL PROCEDURE CutTextKeepEnd@38(Value@1000 : Text;MaxLength@1001 : Integer) : Text;
+    BEGIN
+      // Shortens file names from the front so that the extension survives.
+      IF MaxLength < 1 THEN
+        MaxLength := 1;
+      IF STRLEN(Value) <= MaxLength THEN
+        EXIT(Value);
+      EXIT(COPYSTR(Value,STRLEN(Value) - MaxLength + 1));
+    END;
+
+    PROCEDURE SetInnerRun@19();
+    BEGIN
+      // Internal (RunIsolated): the next RUN of this instance polls the mailbox in "Parameter String".
+      InnerRun := TRUE;
+    END;
+
+    PROCEDURE GetRunResult@39(VAR Imported@1000 : Integer;VAR Failed@1001 : Integer;VAR Skipped@1002 : Integer;VAR FetchError@1003 : Text;VAR Busy@1004 : Boolean);
+    BEGIN
+      // Result of the last PollMailbox of this instance. FetchError <> '': the mailbox could not be read (saved in
+      // "Last Error"). Busy: another session was polling the mailbox, nothing was done.
+      Imported := ImportedCount;
+      Failed := FailedCount;
+      Skipped := SkippedCount;
+      FetchError := FetchErrorText;
+      Busy := RunBusy;
+    END;
+
+    PROCEDURE GetWrittenObjects@40(VAR TempInboundAttachment@1000 : Record 50402);
+    BEGIN
+      // Internal (Codeunit 50404): object keys ("Object Key") and server files ("Server File Path") written by the
+      // last ImportMessage of this instance. Temporary records are not rolled back by the failed import.
+      IF NOT TempInboundAttachment.ISTEMPORARY THEN
+        EXIT;
+      TempInboundAttachment.RESET;
+      TempInboundAttachment.DELETEALL;
+      TempWrittenObject.RESET;
+      IF TempWrittenObject.FINDSET THEN
+        REPEAT
+          TempInboundAttachment := TempWrittenObject;
+          TempInboundAttachment.INSERT;
+        UNTIL TempWrittenObject.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE RunIsolated@18(MailboxCode@1000 : Code[20]) : Boolean;
+    VAR
+      TempJobQueueEntry@1001 : TEMPORARY Record 472;
+      Poller@1002 : Codeunit 50401;
+    BEGIN
+      // Polls one mailbox in its own CODEUNIT.RUN (a new instance of this codeunit). On an error the open
+      // transaction of that mailbox is rolled back, the error is saved in "Last Error" and the run lock is released.
+      // Returns FALSE on an error (text in RunErrorText); the counters, FetchErrorText and RunBusy are copied.
+      ImportedCount := 0;
+      FailedCount := 0;
+      SkippedCount := 0;
+      FetchErrorText := '';
+      RunBusy := FALSE;
+      RunErrorText := '';
+      COMMIT;
+      TempJobQueueEntry.INIT;
+      TempJobQueueEntry."Parameter String" := MailboxCode;
+      Poller.SetInnerRun;
+      CLEARLASTERROR;
+      IF Poller.RUN(TempJobQueueEntry) THEN BEGIN
+        Poller.GetRunResult(ImportedCount,FailedCount,SkippedCount,FetchErrorText,RunBusy);
+        EXIT(TRUE);
+      END;
+      RunErrorText := GetErrorText;
+      SaveMailboxError(MailboxCode,RunErrorText);
+      COMMIT;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE AcquireRunLock@41(MailboxCode@1000 : Code[20]) : Boolean;
+    VAR
+      MailboxSetup@1001 : Record 50400;
+    BEGIN
+      // One poll per mailbox at a time (job queue entries, Poll Now, a second job queue, an entry for all
+      // mailboxes). The lock is stored in Table 50400 and committed, so it holds across the COMMIT per e-mail.
+      // FALSE: another active session holds the lock.
+      COMMIT;
+      MailboxSetup.LOCKTABLE;
+      MailboxSetup.GET(MailboxCode);
+      IF IsRunLockedByOther(MailboxSetup) THEN BEGIN
+        COMMIT;
+        EXIT(FALSE);
+      END;
+      MailboxSetup."Poll Session ID" := SESSIONID;
+      MailboxSetup."Poll Server Instance ID" := SERVICEINSTANCEID;
+      MailboxSetup."Poll Started At" := CURRENTDATETIME;
+      MailboxSetup.MODIFY;
+      COMMIT;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE IsRunLockedByOther@42(VAR MailboxSetup@1000 : Record 50400) : Boolean;
+    VAR
+      ActiveSession@1001 : Record 2000000110;
+    BEGIN
+      IF MailboxSetup."Poll Session ID" = 0 THEN
+        EXIT(FALSE);
+      // One session never runs two polls at once: a lock of this session is left over from an error.
+      IF (MailboxSetup."Poll Session ID" = SESSIONID) AND (MailboxSetup."Poll Server Instance ID" = SERVICEINSTANCEID) THEN
+        EXIT(FALSE);
+      // The lock of a session that no longer exists (crash, service restart, job timeout) is taken over.
+      ActiveSession.SETRANGE("Server Instance ID",MailboxSetup."Poll Server Instance ID");
+      ActiveSession.SETRANGE("Session ID",MailboxSetup."Poll Session ID");
+      EXIT(NOT ActiveSession.ISEMPTY);
+    END;
+
+    LOCAL PROCEDURE ReleaseRunLock@43(VAR MailboxSetup@1000 : Record 50400);
+    BEGIN
+      // Clears the run lock if this session holds it (the caller saves the record).
+      IF (MailboxSetup."Poll Session ID" <> SESSIONID) OR (MailboxSetup."Poll Server Instance ID" <> SERVICEINSTANCEID) THEN
+        EXIT;
+      MailboxSetup."Poll Session ID" := 0;
+      MailboxSetup."Poll Server Instance ID" := 0;
+      MailboxSetup."Poll Started At" := 0DT;
+    END;
+
+    LOCAL PROCEDURE SaveFetchFailure@44(MailboxCode@1000 : Code[20];ErrorText@1001 : Text);
+    VAR
+      MailboxSetup@1002 : Record 50400;
+    BEGIN
+      // The mailbox could not be read. No error is raised (see PollMailbox); the next run tries again.
+      MailboxSetup.GET(MailboxCode);
+      MailboxSetup."Last Poll At" := CURRENTDATETIME;
+      MailboxSetup."Last Error" := COPYSTR(ErrorText,1,MAXSTRLEN(MailboxSetup."Last Error"));
+      MailboxSetup."Last Run Imported" := 0;
+      MailboxSetup."Last Run Errors" := 0;
+      MailboxSetup."Consecutive Failures" += 1;
+      ReleaseRunLock(MailboxSetup);
+      MailboxSetup.MODIFY;
+    END;
+
+    LOCAL PROCEDURE RetryPendingActions@45(VAR MailboxSetup@1000 : Record 50400;VAR GraphMailbox@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox");
+    VAR
+      InboundMail@1002 : Record 50401;
+      TempInboundMail@1003 : TEMPORARY Record 50401;
+    BEGIN
+      // E-mails whose mailbox action failed (or whose run stopped after the import) stay in the source folder, but
+      // Graph does not return them again once the watermark has moved on. They are finished here: subscribers if
+      // they never ran, then the mailbox action. At most 5 attempts per e-mail ("Mailbox Action Attempts") and
+      // 25 e-mails per run.
+      CollectPendingActions(MailboxSetup.Code,InboundMail."Mailbox Action"::Failed,TempInboundMail);
+      CollectPendingActions(MailboxSetup.Code,InboundMail."Mailbox Action"::" ",TempInboundMail);
+      IF TempInboundMail.FINDSET THEN
+        REPEAT
+          IF InboundMail.GET(TempInboundMail."Entry No.") THEN
+            CompleteImportedMail(MailboxSetup,GraphMailbox,InboundMail,'');
+        UNTIL TempInboundMail.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CollectPendingActions@53(MailboxCode@1000 : Code[20];MailboxAction@1001 : Integer;VAR TempInboundMail@1002 : Record 50401);
+    VAR
+      InboundMail@1003 : Record 50401;
+    BEGIN
+      InboundMail.SETCURRENTKEY("Mailbox Code","Mailbox Action");
+      InboundMail.SETRANGE("Mailbox Code",MailboxCode);
+      InboundMail.SETRANGE("Mailbox Action",MailboxAction);
+      InboundMail.SETFILTER("Mailbox Action Attempts",'<%1',5);
+      IF InboundMail.FINDSET THEN
+        REPEAT
+          IF TempInboundMail.COUNT >= 25 THEN
+            EXIT;
+          TempInboundMail := InboundMail;
+          TempInboundMail.INSERT;
+        UNTIL InboundMail.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CompleteImportedMail@47(VAR MailboxSetup@1000 : Record 50400;VAR GraphMailbox@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";VAR InboundMail@1002 : Record 50401;MessageId@1003 : Text);
+    BEGIN
+      // Finishes an imported e-mail: OnAfterImportMail when a run stopped between the import and the subscribers,
+      // then the mailbox action when it is missing or failed.
+      IF (InboundMail.Status = InboundMail.Status::Imported) AND NOT InboundMail."Subscribers Run" AND
+         NOT InboundMail."Import Failed"
+      THEN
+        IF NOT RunSubscribers(InboundMail) THEN
+          RegisterFailure(InboundMail."Error Text");
+      IF InboundMail."Mailbox Action" IN [InboundMail."Mailbox Action"::" ",InboundMail."Mailbox Action"::Failed] THEN
+        IF NOT ApplyMailboxAction(MailboxSetup,GraphMailbox,InboundMail,MessageId) THEN
+          RegisterFailure(InboundMail."Mailbox Action Error");
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE HandleCopyOfImportedMail@48(VAR MailboxSetup@1000 : Record 50400;VAR GraphMailbox@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";VAR InboundMail@1002 : Record 50401;CopyMessageId@1003 : Text);
+    VAR
+      NewAction@1004 : Integer;
+      TargetFolder@1005 : Text;
+      Result@1006 : Text;
+    BEGIN
+      // The copy gets the same mailbox action as the imported e-mail; the NAV record is not changed.
+      SkippedCount += 1;
+      Result :=
+        DoMailboxAction(
+          MailboxSetup,GraphMailbox,InboundMail.Status = InboundMail.Status::Error,CopyMessageId,NewAction,TargetFolder);
+      IF Result <> '' THEN
+        RegisterFailure(STRSUBSTNO(CopyActionFailedErr,InboundMail."Entry No.",Result));
+    END;
+
+    LOCAL PROCEDURE DoMailboxAction@46(VAR MailboxSetup@1000 : Record 50400;VAR GraphMailbox@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";IsError@1002 : Boolean;MessageId@1003 : Text;VAR NewAction@1004 : Integer;VAR TargetFolder@1005 : Text) : Text;
+    VAR
+      InboundMail@1006 : Record 50401;
+      Result@1007 : Text;
+    BEGIN
+      // Runs the After Import action for one Graph message. Returns '' or the Graph error text.
+      NewAction := InboundMail."Mailbox Action"::Kept;
+      TargetFolder := '';
+      IF MailboxSetup."After Import" = MailboxSetup."After Import"::Nothing THEN
+        EXIT('');
+      IF IsError THEN BEGIN
+        TargetFolder := GetErrorFolder(MailboxSetup);
+        Result := GraphMailbox.MoveToFolder(MessageId,TargetFolder);
+        NewAction := InboundMail."Mailbox Action"::Moved;
+        EXIT(Result);
+      END;
+      CASE MailboxSetup."After Import" OF
+        MailboxSetup."After Import"::"Move to Processed Folder":
+          BEGIN
+            TargetFolder := GetProcessedFolder(MailboxSetup);
+            Result := GraphMailbox.MoveToFolder(MessageId,TargetFolder);
+            NewAction := InboundMail."Mailbox Action"::Moved;
+          END;
+        MailboxSetup."After Import"::"Mark as Read":
+          BEGIN
+            Result := GraphMailbox.MarkAsRead(MessageId);
+            NewAction := InboundMail."Mailbox Action"::"Marked as Read";
+          END;
+        MailboxSetup."After Import"::Delete:
+          BEGIN
+            Result := GraphMailbox.DeleteMessage(MessageId);
+            NewAction := InboundMail."Mailbox Action"::Deleted;
+          END;
+      END;
+      EXIT(Result);
+    END;
+
+    LOCAL PROCEDURE RememberWrittenObject@49(StorageLocation@1000 : Integer;KeyOrPath@1001 : Text);
+    BEGIN
+      // Called before the upload / file write, so that a partly written object is removed as well.
+      TempWrittenObject.INIT;
+      TempWrittenObject."Entry No." := TempWrittenObject.COUNT + 1;
+      TempWrittenObject."Storage Location" := StorageLocation;
+      IF StorageLocation = TempWrittenObject."Storage Location"::"Server Folder" THEN
+        TempWrittenObject."Server File Path" := COPYSTR(KeyOrPath,1,MAXSTRLEN(TempWrittenObject."Server File Path"))
+      ELSE
+        TempWrittenObject."Object Key" := COPYSTR(KeyOrPath,1,MAXSTRLEN(TempWrittenObject."Object Key"));
+      TempWrittenObject.INSERT;
+    END;
+
+    LOCAL PROCEDURE DeleteWrittenObjects@54(VAR Runner@1000 : Codeunit 50404;VAR StorageClient@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.ObjectStorageClient";StorageReady@1002 : Boolean);
+    VAR
+      TempWritten@1003 : TEMPORARY Record 50402;
+      Result@1004 : Text;
+    BEGIN
+      // Best effort after a failed import: removes the objects / server files of this attempt (each attempt uses a
+      // new entry number, so nothing else lives under these keys). Errors are ignored (no ERROR here).
+      Runner.GetWrittenObjects(TempWritten);
+      IF TempWritten.FINDSET THEN
+        REPEAT
+          CASE TempWritten."Storage Location" OF
+            TempWritten."Storage Location"::"Object Storage":
+              IF StorageReady THEN
+                Result := StorageClient.Delete(TempWritten."Object Key");
+            TempWritten."Storage Location"::"Server Folder":
+              IF EXISTS(TempWritten."Server File Path") THEN
+                IF ERASE(TempWritten."Server File Path") THEN;
+          END;
+        UNTIL TempWritten.NEXT = 0;
+    END;
+
+    [Integration]
+    PROCEDURE OnBeforeImportMail@50(MailboxSetup@1000 : Record 50400;MailItem@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailItem";VAR Skip@1002 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnAfterImportMail@51(VAR InboundMail@1000 : Record 50401);
+    BEGIN
+    END;
+
+    [Integration]
+    PROCEDURE OnAfterImportAttachment@52(VAR InboundAttachment@1000 : Record 50402);
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      nav2016-mailgraph - Codeunit 50401 "Graph Mailbox Polling"
+      https://github.com/nolotz/nav2016-mailgraph (MIT License)
+
+      Job queue codeunit (TableNo 472): "Parameter String" = mailbox code (Table 50400), blank = all enabled mailboxes.
+      Every mailbox is polled in its own CODEUNIT.RUN (RunIsolated) under a run lock stored in Table 50400
+      ("Poll Session ID"; one poll per mailbox at a time, the lock of an ended session is taken over).
+      A mailbox that cannot be read is recorded in "Last Error" / "Consecutive Failures" without an error, so the
+      recurring job queue entry keeps running; only setup errors end the job queue run with an error.
+      Per run: retry of failed mailbox actions of earlier runs (RetryPendingActions), then per e-mail: duplicate check
+      (Graph id, then internetMessageId; another copy only gets the mailbox action), import in its own transaction
+      (Codeunit 50404; objects written by a failed import are deleted again), COMMIT, OnAfterImportMail in its own
+      transaction (Codeunit 50404, sets "Subscribers Run"), mailbox action (move/mark/delete), watermark update,
+      COMMIT. A failing e-mail gets Status = Error, is moved to the error folder and the run continues. Delta mode
+      stores the Graph delta link in Table 50400."Delta Link".
+
+      Events (integration, NAV 2016):
+        OnBeforeImportMail(MailboxSetup,MailItem,VAR Skip)  - runs inside the import transaction
+        OnAfterImportMail(VAR InboundMail)                   - runs in its own transaction; change the VAR record,
+                                                               do not MODIFY it yourself (the runner saves it)
+        OnAfterImportAttachment(VAR InboundAttachment)       - runs inside the import transaction
+
+      Not compiled in CI - compile and test in C/SIDE (NAV 2016) before use.
+
+      NMG2.00  initial version
+    }
+    END.
+  }
+}

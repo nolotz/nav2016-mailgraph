@@ -1,0 +1,94 @@
+OBJECT Table 50402 Graph Inbound Attachment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[DEU=Graph-Posteingang Anhang;
+               ENU=Graph Inbound Attachment];
+    LookupPageID=Page50406;
+    DrillDownPageID=Page50406;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Entry No.           ;Integer       ;AutoIncrement=Yes;
+                                                   CaptionML=[DEU=Lfd. Nr.;
+                                                              ENU=Entry No.] }
+    { 2   ;   ;Mail Entry No.      ;Integer       ;TableRelation="Graph Inbound Mail";
+                                                   CaptionML=[DEU=Lfd. Nr. E-Mail;
+                                                              ENU=Mail Entry No.] }
+    { 3   ;   ;Mailbox Code        ;Code20        ;TableRelation="Graph Mailbox Setup";
+                                                   CaptionML=[DEU=Postfachcode;
+                                                              ENU=Mailbox Code] }
+    { 4   ;   ;Graph Attachment ID ;Text250       ;CaptionML=[DEU=Graph-Anhangs-ID;
+                                                              ENU=Graph Attachment ID] }
+    { 5   ;   ;Name                ;Text250       ;CaptionML=[DEU=Name;
+                                                              ENU=Name] }
+    { 6   ;   ;File Name           ;Text250       ;CaptionML=[DEU=Dateiname;
+                                                              ENU=File Name] }
+    { 7   ;   ;Content Type        ;Text100       ;CaptionML=[DEU=Inhaltstyp;
+                                                              ENU=Content Type] }
+    { 8   ;   ;Size                ;BigInteger    ;CaptionML=[DEU=Grî·e;
+                                                              ENU=Size] }
+    { 9   ;   ;Is Inline           ;Boolean       ;CaptionML=[DEU=Inline;
+                                                              ENU=Is Inline] }
+    { 10  ;   ;Content ID          ;Text250       ;CaptionML=[DEU=Inhalts-ID;
+                                                              ENU=Content ID] }
+    { 11  ;   ;Kind                ;Option        ;CaptionML=[DEU=Art;
+                                                              ENU=Kind];
+                                                   OptionCaptionML=[DEU=Datei,Element,Verweis;
+                                                                    ENU=File,Item,Reference];
+                                                   OptionString=File,Item,Reference }
+    { 12  ;   ;Storage Location    ;Option        ;CaptionML=[DEU=Ablageort;
+                                                              ENU=Storage Location];
+                                                   OptionCaptionML=[DEU=" ,Datenbank (BLOB),Objektspeicher,Serverordner";
+                                                                    ENU=" ,Database (BLOB),Object Storage,Server Folder"];
+                                                   OptionString=[ ,Database (BLOB),Object Storage,Server Folder] }
+    { 13  ;   ;Content             ;BLOB          ;CaptionML=[DEU=Inhalt;
+                                                              ENU=Content] }
+    { 14  ;   ;Storage Profile Code;Code20        ;TableRelation="Object Storage Profile";
+                                                   CaptionML=[DEU=Speicherprofilcode;
+                                                              ENU=Storage Profile Code] }
+    { 15  ;   ;Object Key          ;Text250       ;CaptionML=[DEU=ObjektschlÅssel;
+                                                              ENU=Object Key] }
+    { 16  ;   ;Storage ETag        ;Text100       ;CaptionML=[DEU=Speicher-ETag;
+                                                              ENU=Storage ETag] }
+    { 17  ;   ;Stored Size         ;BigInteger    ;CaptionML=[DEU=Gespeicherte Grî·e;
+                                                              ENU=Stored Size] }
+    { 18  ;   ;Server File Path    ;Text250       ;CaptionML=[DEU=Serverdateipfad;
+                                                              ENU=Server File Path] }
+    { 19  ;   ;Status              ;Option        ;CaptionML=[DEU=Status;
+                                                              ENU=Status];
+                                                   OptionCaptionML=[DEU=Ausstehend,Gespeichert,öbersprungen (zu gro·),öbersprungen (Verweis);
+                                                                    ENU=Pending,Stored,Skipped (Too Large),Skipped (Link)];
+                                                   OptionString=Pending,Stored,Skipped (Too Large),Skipped (Link) }
+    { 20  ;   ;Created At          ;DateTime      ;CaptionML=[DEU=Erstellt am;
+                                                              ENU=Created At] }
+  }
+  KEYS
+  {
+    {    ;Entry No.                               ;Clustered=Yes }
+    {    ;Mail Entry No.                           }
+    {    ;Mailbox Code,Storage Location            }
+  }
+  FIELDGROUPS
+  {
+    { 1   ;DropDown            ;Entry No.,File Name,Size                 }
+  }
+  CODE
+  {
+    BEGIN
+    {
+      nav2016-mailgraph - Table 50402 "Graph Inbound Attachment".
+      The content is in exactly one place, given by "Storage Location": Content (BLOB), object storage
+      ("Storage Profile Code" + "Object Key", key without the Key Prefix of the profile) or "Server File Path".
+      Use Codeunit 50403 "Graph Inbound Mail Mgt." (OpenAttachment, GetAttachmentContent) instead of reading
+      these fields directly.
+    }
+    END.
+  }
+}

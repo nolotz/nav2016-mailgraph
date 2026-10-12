@@ -1,0 +1,146 @@
+OBJECT Table 50400 Graph Mailbox Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[DEU=Graph-Postfacheinrichtung;
+               ENU=Graph Mailbox Setup];
+    LookupPageID=Page50400;
+    DrillDownPageID=Page50400;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Code                ;Code20        ;NotBlank=Yes;
+                                                   CaptionML=[DEU=Code;
+                                                              ENU=Code] }
+    { 2   ;   ;Description         ;Text50        ;CaptionML=[DEU=Beschreibung;
+                                                              ENU=Description] }
+    { 3   ;   ;Mailbox             ;Text250       ;CaptionML=[DEU=Postfach;
+                                                              ENU=Mailbox] }
+    { 4   ;   ;Folder              ;Text250       ;InitValue=Inbox;
+                                                   CaptionML=[DEU=Ordner;
+                                                              ENU=Folder] }
+    { 5   ;   ;Processed Folder    ;Text250       ;CaptionML=[DEU=Ordner fÅr verarbeitete E-Mails;
+                                                              ENU=Processed Folder] }
+    { 6   ;   ;Error Folder        ;Text250       ;CaptionML=[DEU=Fehlerordner;
+                                                              ENU=Error Folder] }
+    { 7   ;   ;After Import        ;Option        ;CaptionML=[DEU=Nach dem Import;
+                                                              ENU=After Import];
+                                                   OptionCaptionML=[DEU=In Ordner fÅr verarbeitete E-Mails verschieben,Als gelesen markieren,Lîschen,Nichts;
+                                                                    ENU=Move to Processed Folder,Mark as Read,Delete,Nothing];
+                                                   OptionString=Move to Processed Folder,Mark as Read,Delete,Nothing }
+    { 8   ;   ;Polling Mode        ;Option        ;CaptionML=[DEU=Abrufmodus;
+                                                              ENU=Polling Mode];
+                                                   OptionCaptionML=[DEU=Empfangsdatum (Wasserzeichen),Delta-Abfrage;
+                                                                    ENU=Received Date Watermark,Delta Query];
+                                                   OptionString=Received Date Watermark,Delta Query }
+    { 9   ;   ;Unread Only         ;Boolean       ;CaptionML=[DEU=Nur ungelesene;
+                                                              ENU=Unread Only] }
+    { 10  ;   ;Max. Mails per Run  ;Integer       ;InitValue=50;
+                                                   MinValue=0;
+                                                   MaxValue=1000;
+                                                   CaptionML=[DEU=Max. E-Mails pro Lauf;
+                                                              ENU=Max. Mails per Run] }
+    { 11  ;   ;Import Body         ;Boolean       ;InitValue=Yes;
+                                                   CaptionML=[DEU=Text importieren;
+                                                              ENU=Import Body] }
+    { 12  ;   ;Body as Text        ;Boolean       ;CaptionML=[DEU=Text als Nur-Text;
+                                                              ENU=Body as Text] }
+    { 13  ;   ;Attachment Storage  ;Option        ;CaptionML=[DEU=Ablage der AnhÑnge;
+                                                              ENU=Attachment Storage];
+                                                   OptionCaptionML=[DEU=Datenbank (BLOB),Objektspeicher,Serverordner;
+                                                                    ENU=Database (BLOB),Object Storage,Server Folder];
+                                                   OptionString=Database (BLOB),Object Storage,Server Folder }
+    { 14  ;   ;Storage Profile Code;Code20        ;TableRelation="Object Storage Profile";
+                                                   CaptionML=[DEU=Speicherprofilcode;
+                                                              ENU=Storage Profile Code] }
+    { 15  ;   ;Server Folder Path  ;Text250       ;CaptionML=[DEU=Serverordnerpfad;
+                                                              ENU=Server Folder Path] }
+    { 16  ;   ;Max. BLOB Size (KB) ;Integer       ;InitValue=4096;
+                                                   MinValue=0;
+                                                   CaptionML=[DEU=Max. BLOB-Grî·e (KB);
+                                                              ENU=Max. BLOB Size (KB)] }
+    { 17  ;   ;Skip Inline Images  ;Boolean       ;InitValue=Yes;
+                                                   CaptionML=[DEU=Inline-Bilder Åberspringen;
+                                                              ENU=Skip Inline Images] }
+    { 18  ;   ;Enabled             ;Boolean       ;CaptionML=[DEU=Aktiviert;
+                                                              ENU=Enabled] }
+    { 19  ;   ;Polling Interval (Min.);Integer    ;InitValue=5;
+                                                   MinValue=1;
+                                                   CaptionML=[DEU=Abrufintervall (Min.);
+                                                              ENU=Polling Interval (Min.)] }
+    { 20  ;   ;Import From Date    ;Date          ;CaptionML=[DEU=Importieren ab Datum;
+                                                              ENU=Import From Date] }
+    { 30  ;   ;Last Poll At        ;DateTime      ;CaptionML=[DEU=Letzter Abruf am;
+                                                              ENU=Last Poll At];
+                                                   Editable=No }
+    { 31  ;   ;Last Error          ;Text250       ;CaptionML=[DEU=Letzter Fehler;
+                                                              ENU=Last Error];
+                                                   Editable=No }
+    { 32  ;   ;Last Run Imported   ;Integer       ;CaptionML=[DEU=Letzter Lauf: importiert;
+                                                              ENU=Last Run Imported];
+                                                   Editable=No }
+    { 33  ;   ;Last Run Errors     ;Integer       ;CaptionML=[DEU=Letzter Lauf: Fehler;
+                                                              ENU=Last Run Errors];
+                                                   Editable=No }
+    { 34  ;   ;Last Received (Text);Text50        ;CaptionML=[DEU=Zuletzt empfangen (Text);
+                                                              ENU=Last Received (Text)];
+                                                   Editable=No }
+    { 35  ;   ;Last Received At    ;DateTime      ;CaptionML=[DEU=Zuletzt empfangen am;
+                                                              ENU=Last Received At];
+                                                   Editable=No }
+    { 36  ;   ;Delta Link          ;BLOB          ;CaptionML=[DEU=Delta-Link;
+                                                              ENU=Delta Link] }
+    { 37  ;   ;Poll Session ID     ;Integer       ;CaptionML=[DEU=Abruf-Sitzungs-ID;
+                                                              ENU=Poll Session ID];
+                                                   Editable=No }
+    { 38  ;   ;Poll Server Instance ID;Integer    ;CaptionML=[DEU=Abruf-Serverinstanz-ID;
+                                                              ENU=Poll Server Instance ID];
+                                                   Editable=No }
+    { 39  ;   ;Poll Started At     ;DateTime      ;CaptionML=[DEU=Abruf gestartet am;
+                                                              ENU=Poll Started At];
+                                                   Editable=No }
+    { 40  ;   ;Mails Imported      ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Graph Inbound Mail" WHERE (Mailbox Code=FIELD(Code)));
+                                                   CaptionML=[DEU=Importierte E-Mails;
+                                                              ENU=Mails Imported];
+                                                   Editable=No }
+    { 41  ;   ;Mails with Errors   ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("Graph Inbound Mail" WHERE (Mailbox Code=FIELD(Code),
+                                                                                                 Status=CONST(Error)));
+                                                   CaptionML=[DEU=E-Mails mit Fehlern;
+                                                              ENU=Mails with Errors];
+                                                   Editable=No }
+    { 42  ;   ;Consecutive Failures;Integer       ;CaptionML=[DEU=Fehlgeschlagene Abrufe in Folge;
+                                                              ENU=Consecutive Failures];
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Code                                    ;Clustered=Yes }
+    {    ;Enabled                                  }
+  }
+  FIELDGROUPS
+  {
+    { 1   ;DropDown            ;Code,Description,Mailbox                 }
+  }
+  CODE
+  {
+    BEGIN
+    {
+      nav2016-mailgraph - Table 50400 "Graph Mailbox Setup" (one line per polled mailbox).
+      Polled by Codeunit 50401 "Graph Mailbox Polling". Credentials come from Table 409 (Graph fields).
+      "Last Received (Text)" is the polling watermark (exact Graph receivedDateTime text, passed back unchanged).
+      "Delta Link" holds the Graph delta link in Delta Query mode.
+      "Poll Session ID"/"Poll Server Instance ID"/"Poll Started At": run lock of Codeunit 50401 (one poll per mailbox
+      at a time). A lock whose session no longer exists (Table 2000000110 "Active Session") is taken over.
+      "Consecutive Failures": polls in a row that could not read the mailbox (reset by the next successful poll).
+    }
+    END.
+  }
+}

@@ -6,9 +6,11 @@ PowerShell scripts that take you from "nothing" to "NAV 2016 sends mail through 
 |---|--------|---------|---------|
 | 1 | `New-NavMailGraphCertificate.ps1` | admin workstation (PowerShell 7 on macOS/Windows/Linux, or Windows PowerShell 5.1) | self-signed RSA certificate → `.pfx` (private key) + `.cer` (public key) |
 | 2 | `New-NavMailGraphApp.ps1` | admin workstation, Microsoft Graph PowerShell SDK | Entra app registration + service principal, uploads the `.cer`; by default **no** Graph permission |
-| 3 | `Grant-NavMailGraphMailboxScope.ps1` | admin workstation, ExchangeOnlineManagement | Exchange Online RBAC for Applications: `Application Mail.Send` (+ `Mail.ReadWrite`) **only** for the sender mailbox(es) |
+| 3 | `Grant-NavMailGraphMailboxScope.ps1` | admin workstation, ExchangeOnlineManagement | Exchange Online RBAC for Applications: `Application Mail.Send` (+ `Mail.Read` / `Mail.ReadWrite`) **only** for the scoped mailbox(es) |
 | 4 | `Install-NavMailGraphAddin.ps1` | NAV Server (Windows, elevated, Windows PowerShell 5.1) | copies the add-in, imports the `.pfx`, grants the service account access to the private key, checks .NET/TLS, restarts the instance |
-| – | `Remove-NavMailGraphMailboxScope.ps1` | admin workstation | removes the role assignments and scope created by step 3 |
+| – | `Remove-NavMailGraphMailboxScope.ps1` | admin workstation | removes the role assignments (Mail.Send, Mail.Read, Mail.ReadWrite) and scope created by step 3 |
+| – | `New-NavMailGraphStorage.ps1` | admin workstation, Az PowerShell (or `-PrintOnly` for az CLI) | optional: Azure storage account + container, `Storage Blob Data Contributor` for the app on that container |
+| – | `s3-iam-policy.json` | AWS IAM | optional: least-privilege policy example for one S3 bucket/prefix |
 
 Every script has comment-based help (`Get-Help ./<script>.ps1 -Full`), supports `-WhatIf` where it changes
 anything, never writes secrets to disk, and ends with the values to enter on NAV page 409 "SMTP Mail Setup".
@@ -47,8 +49,11 @@ $app = ./New-NavMailGraphApp.ps1 -DisplayName 'NAV2016 MailGraph' -CertificatePa
     -DisplayName $app.DisplayName -Mailbox nav@contoso.com -NegativeTestMailbox ceo@contoso.com
 #    add -IncludeReadWrite if NAV must send attachments > ~2.5 MB in total ("Graph Large Messages" = Yes;
 #    the sendMail request incl. base64 encoding is limited to 3.5 MiB, so a 3 MB PDF already needs it)
+#    add -IncludeRead if NAV only READS mail from these mailboxes (After Import = Nothing); reading AND marking as
+#    read / moving to a Processed folder / deleting needs -IncludeReadWrite instead (Mail.ReadWrite includes reading)
 
-# 4. NAV Server (copy the .pfx and the release folder to the server; elevated Windows PowerShell 5.1)
+# 4. NAV Server (copy the .pfx and the extracted release folder to the server; run from its deploy\ folder in an
+#    elevated Windows PowerShell 5.1; the script finds ..\Add-ins\NavMailGraph and ..\SHA256SUMS)
 .\Install-NavMailGraphAddin.ps1 -ServerInstance DynamicsNAV90 -PfxPath C:\Temp\NavMailGraph.pfx -FixTls -WhatIf
 .\Install-NavMailGraphAddin.ps1 -ServerInstance DynamicsNAV90 -PfxPath C:\Temp\NavMailGraph.pfx -FixTls
 #    C/SIDE development machine: add -RoleTailoredClient
@@ -66,10 +71,28 @@ is connected (`Get-MgContext`) to the same tenant as the Exchange Online session
 script); otherwise, or if the check itself fails (e.g. the Graph session lacks `Application.Read.All`), it prints how to
 check manually and returns `TenantWideGraphGrant = $null` (not verified).
 
-Step 3 is idempotent but strict: an existing assignment named `<ScopeName> Mail.Send` / `<ScopeName> Mail.ReadWrite`
-with another scope or **no** scope (organization-wide) stops the script. Running step 3 without `-IncludeReadWrite`
-after an earlier run with it does **not** remove `Mail.ReadWrite`; the script warns and lists the assignment in its
-output. Remove it with `Remove-ManagementRoleAssignment` (command shown in the warning).
+Step 3 is idempotent but strict: an existing assignment named `<ScopeName> Mail.Send` / `<ScopeName> Mail.Read` /
+`<ScopeName> Mail.ReadWrite` with another scope or **no** scope (organization-wide) stops the script. Running step 3
+without `-IncludeRead` / `-IncludeReadWrite` after an earlier run with it does **not** remove `Mail.Read` /
+`Mail.ReadWrite`; the script warns and lists the assignment in its output. Remove it with
+`Remove-ManagementRoleAssignment` (command shown in the warning).
+
+**Reading mail (v0.2):** which role the mail import needs depends on the mailbox setup field "After Import":
+
+| After Import | Exchange role (variant A) | switch |
+|---|---|---|
+| Nothing (read-only, dedupe by Message ID) | `Application Mail.Read` | `-IncludeRead` |
+| Mark as Read, Move to Processed Folder, Delete (and creating the Processed/Error folder) | `Application Mail.ReadWrite` | `-IncludeReadWrite` |
+
+The scope can contain the sender and the polled mailboxes; if they differ, use a separate `-ScopeName` per purpose
+so the app cannot read the sender mailbox or send as the inbound mailbox:
+
+```powershell
+./Grant-NavMailGraphMailboxScope.ps1 -AppId $app.ClientId -ServicePrincipalObjectId $app.ServicePrincipalObjectId `
+    -Mailbox invoices-in@contoso.com -IncludeReadWrite -ScopeName 'NavMailGraph inbound' -NegativeTestMailbox ceo@contoso.com
+```
+
+Note that Mail.Send is always assigned by step 3, also for an inbound-only scope.
 
 A group of senders instead of single mailboxes:
 
@@ -124,9 +147,51 @@ in table 1261 "Service Password". Microsoft recommends certificates over secrets
 | Graph client secret (masked) | secret value (secret variant only) | step 2 |
 | Graph Sender Mailbox | one of the scoped mailboxes, e.g. `nav@contoso.com` | step 3 |
 | Graph Large Messages | Yes only if `Application Mail.ReadWrite` (variant A, `-IncludeReadWrite`) or Graph `Mail.ReadWrite` (variant B) is granted | steps 2/3 |
+| Graph Mailbox Setup (page 50400), mailbox | one of the scoped mailboxes with `Mail.Read` (After Import = Nothing) or `Mail.ReadWrite` | step 3 |
 | Graph Token Library | Built-in (default); MSAL only if installed with `-IncludeMsal` | step 4 |
 
 Then use the page actions "Test Graph Connection" and "Send Graph Test Email".
+
+## Object storage (optional, v0.2)
+
+Attachments of imported mails and large outgoing files can go to Azure Blob Storage or an S3-compatible bucket
+(see `docs/object-storage.md`).
+
+**Azure, Entra ID mode** (no key in NAV; the add-in uses the same app registration and certificate as for Graph):
+
+```powershell
+# Az PowerShell (Install-Module Az.Accounts, Az.Resources, Az.Storage -Scope CurrentUser)
+./New-NavMailGraphStorage.ps1 -ResourceGroupName rg-nav -StorageAccountName contosonavmail -Location westeurope `
+    -ContainerName nav-mail -AppId $app.ClientId -WhatIf
+./New-NavMailGraphStorage.ps1 -ResourceGroupName rg-nav -StorageAccountName contosonavmail -Location westeurope `
+    -ContainerName nav-mail -AppId $app.ClientId
+
+# or only print the equivalent az CLI commands
+./New-NavMailGraphStorage.ps1 -ResourceGroupName rg-nav -StorageAccountName contosonavmail -Location westeurope `
+    -AppId $app.ClientId -PrintOnly
+```
+
+The script creates (or reuses) the resource group, a StorageV2 account (TLS 1.2, HTTPS only, no anonymous access)
+and the container via the management plane (`New-AzRmStorageContainer`), and assigns `Storage Blob Data Contributor`
+to the app's service principal at **container** scope
+(`.../storageAccounts/<account>/blobServices/default/containers/<container>`). It warns about broader assignments
+of the same app. Role assignments take up to 10 minutes. It never reads or prints account keys.
+`GetDownloadUrl` (download links) needs Shared Key or a SAS URL; the Entra mode cannot create links. With
+`-DisableSharedKeyAccess` (new accounts only) Shared Key and service SAS are switched off entirely.
+
+**S3** (AWS or compatible): `s3-iam-policy.json` is a least-privilege IAM policy for one bucket and key prefix.
+Replace `my-nav-bucket` and `nav-mail/` with your bucket and the profile's key prefix, attach the policy to a
+dedicated IAM user and create an access key for it (enter the secret in NAV only). It allows `s3:ListBucket`
+(limited to the prefix with the `s3:prefix` condition), `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`,
+`s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` on `nav-mail/*` (multipart create/upload part/complete are
+covered by `s3:PutObject`). Notes:
+
+* Without a key prefix in the NAV profile, use `arn:aws:s3:::my-nav-bucket/*` and drop the `Condition` block.
+* S3 returns 403 instead of 404 for a missing object when the caller lacks `s3:ListBucket` for that request; if
+  "Exists" on missing objects reports access denied with the prefix condition, remove the `Condition` block
+  (listing the whole bucket is then allowed, reading other objects still is not).
+* Other providers (MinIO, Wasabi, Cloudflare R2) have their own policy or token formats; MinIO and Wasabi accept
+  AWS-style JSON policies, R2 uses API tokens scoped to a bucket.
 
 ## Notes and limits
 

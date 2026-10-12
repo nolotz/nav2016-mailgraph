@@ -4,12 +4,14 @@
 
 .DESCRIPTION
     Looks up, by name:
-      * the role assignments "<ScopeName> Mail.Send" and "<ScopeName> Mail.ReadWrite" (same naming rule as
-        the grant script, scope part shortened to keep the name within 64 characters), and
-      * any other 'Application Mail.Send' / 'Application Mail.ReadWrite' assignment whose CustomResourceScope is
-        <ScopeName> (a scope cannot be removed while assignments still reference it),
+      * the role assignments "<ScopeName> Mail.Send", "<ScopeName> Mail.Read" (-IncludeRead of the grant script)
+        and "<ScopeName> Mail.ReadWrite" (same naming rule as the grant script, scope part shortened to keep the
+        name within 64 characters), and
+      * any other 'Application Mail.Send' / 'Application Mail.Read' / 'Application Mail.ReadWrite' assignment
+        whose CustomResourceScope is <ScopeName> (a scope cannot be removed while assignments still reference it),
     removes them with Remove-ManagementRoleAssignment and then removes the management scope with
-    Remove-ManagementScope.
+    Remove-ManagementScope. Always all three roles: to take away only reading (or only Mail.ReadWrite) and keep
+    sending, use Remove-ManagementRoleAssignment -Identity '<ScopeName> Mail.Read' instead.
 
     With -RemoveServicePrincipal -AppId the Exchange service principal pointer (New-ServicePrincipal) is removed
     too (Remove-ServicePrincipal). This does not touch the Entra app registration; deleting the service principal
@@ -97,7 +99,7 @@ if (-not (Get-Command Remove-ManagementRoleAssignment -ErrorAction SilentlyConti
 }
 
 $removed = @()
-$roles = @('Application Mail.Send', 'Application Mail.ReadWrite')
+$roles = @('Application Mail.Send', 'Application Mail.Read', 'Application Mail.ReadWrite')
 foreach ($role in $roles) {
     $name = Get-AssignmentName -Scope $ScopeName -Suffix ($role -replace '^Application ', '')
     $hits = @(Get-ManagementRoleAssignment -Role $role -ErrorAction Stop | Where-Object {
@@ -162,6 +164,6 @@ if ($RemoveServicePrincipal) {
 Write-Host ''
 if ($removed.Count -gt 0) {
     Write-Host 'Note: Exchange caches app permissions for 30 minutes to 2 hours; the app may keep working during that window.' -ForegroundColor Cyan
-    Write-Host 'If the app should not send mail anymore at all, also delete its credentials or the app registration in Entra ID.'
+    Write-Host 'If the app should not send or read mail anymore at all, also delete its credentials or the app registration in Entra ID.'
 }
 $removed

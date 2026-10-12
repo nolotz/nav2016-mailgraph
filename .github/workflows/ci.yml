@@ -74,3 +74,77 @@ jobs:
           $results = Invoke-ScriptAnalyzer -Path deploy -Recurse -Severity Error,Warning -ExcludeRule PSAvoidUsingPlainTextForPassword,PSAvoidUsingConvertToSecureStringWithPlainText
           $results | Format-Table -AutoSize
           if ($results | Where-Object Severity -eq 'Error') { exit 1 }
+
+  integration:
+    name: Storage integration (Azurite + SeaweedFS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Start emulators
+        run: docker compose -f tests/integration/docker-compose.yml up -d
+
+      - name: Restore and build tests
+        run: dotnet build tests/NavMailGraph.Tests -c Release -f net8.0
+
+      - name: Wait for emulators
+        shell: bash
+        run: |
+          # Readiness check: anonymous requests are rejected once the services are up (Azurite 400/403, SeaweedFS S3 403).
+          # Several accepted codes are checked in one loop. Keep tests/integration/run.sh in line with this function.
+          wait_for() { # name url expected-status...
+            local name="$1" url="$2"; shift 2
+            for _ in $(seq 1 90); do
+              code="$(curl -s -o /dev/null -w '%{http_code}' "$url" || true)"
+              for want in "$@"; do
+                if [ "$code" = "$want" ]; then echo "$name ready ($code)"; return 0; fi
+              done
+              sleep 1
+            done
+            echo "$name did not become ready ($url -> $code)" >&2
+            return 1
+          }
+          wait_for azurite "http://127.0.0.1:10000/devstoreaccount1?comp=list" 403 400
+          wait_for seaweedfs "http://127.0.0.1:8333/" 403
+
+      - name: Integration tests (NMG_INTEGRATION=1)
+        env:
+          NMG_INTEGRATION: '1'
+        run: dotnet test tests/NavMailGraph.Tests -c Release -f net8.0 --no-build --filter Category=Integration --logger "trx;LogFileName=integration.trx" --results-directory TestResults
+
+      - name: Check that integration tests ran (none skipped)
+        shell: python
+        run: |
+          import glob, sys, xml.etree.ElementTree as ET
+          files = glob.glob("TestResults/integration.trx")
+          if not files:
+              sys.exit("integration.trx not found")
+          ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+          c = ET.parse(files[0]).getroot().find("t:ResultSummary/t:Counters", ns)
+          total, executed, passed = int(c.get("total")), int(c.get("executed")), int(c.get("passed"))
+          print(f"integration tests: total={total} executed={executed} passed={passed}")
+          if total == 0 or executed != total:
+              sys.exit("integration tests were skipped or not found (NMG_INTEGRATION not honoured?)")
+
+      - name: Emulator logs
+        if: failure()
+        run: docker compose -f tests/integration/docker-compose.yml logs --tail 200
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-integration
+          path: TestResults/*.trx
+          if-no-files-found: ignore
+
+      - name: Stop emulators
+        if: always()
+        run: docker compose -f tests/integration/docker-compose.yml down

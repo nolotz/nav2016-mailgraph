@@ -1,0 +1,64 @@
+OBJECT Codeunit 50404 Graph Mail Import Runner
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    TableNo=50401;
+    OnRun=BEGIN
+            // Internal helper of Codeunit 50401. Called with IF Runner.RUN(InboundMail) so that an error rolls back
+            // only the work of one e-mail. Mode 1 (after SetImportContext): import the e-mail. Mode 2 (default):
+            // raise OnAfterImportMail and save the VAR record the subscribers changed. "Subscribers Run" is saved in
+            // the same transaction, so a run that stopped before this commit raises the event again (Codeunit 50401).
+            IF ImportMode THEN
+              GraphMailboxPolling.ImportMessage(Rec,MailboxSetup,GraphMailbox,MailItem,StorageClient,StorageReady)
+            ELSE BEGIN
+              GraphMailboxPolling.OnAfterImportMail(Rec);
+              "Subscribers Run" := TRUE;
+              MODIFY;
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      GraphMailboxPolling@1000 : Codeunit 50401;
+      MailboxSetup@1001 : Record 50400;
+      GraphMailbox@1002 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";
+      MailItem@1003 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailItem";
+      StorageClient@1004 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.ObjectStorageClient";
+      StorageReady@1005 : Boolean;
+      ImportMode@1006 : Boolean;
+
+    PROCEDURE SetImportContext@1(NewMailboxSetup@1000 : Record 50400;NewGraphMailbox@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailbox";NewMailItem@1002 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphMailItem";NewStorageClient@1003 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.ObjectStorageClient";NewStorageReady@1004 : Boolean);
+    BEGIN
+      MailboxSetup := NewMailboxSetup;
+      GraphMailbox := NewGraphMailbox;
+      MailItem := NewMailItem;
+      StorageClient := NewStorageClient;
+      StorageReady := NewStorageReady;
+      ImportMode := TRUE;
+    END;
+
+    PROCEDURE GetWrittenObjects@2(VAR TempInboundAttachment@1000 : Record 50402);
+    BEGIN
+      // After a failed import: the object keys / server files the import wrote (they are not rolled back).
+      // Pass a TEMPORARY record.
+      GraphMailboxPolling.GetWrittenObjects(TempInboundAttachment);
+    END;
+
+    BEGIN
+    {
+      nav2016-mailgraph - Codeunit 50404 "Graph Mail Import Runner" (internal, used by Codeunit 50401).
+      Not compiled in CI - compile and test in C/SIDE (NAV 2016) before use.
+
+      NMG2.00  initial version; "Subscribers Run", GetWrittenObjects
+    }
+    END.
+  }
+}

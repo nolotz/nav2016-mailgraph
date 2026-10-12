@@ -1,0 +1,89 @@
+OBJECT Page 50408 Graph Inbound Mail Body
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    Editable=No;
+    CaptionML=[DEU=E-Mail-Text;
+               ENU=E-Mail Body];
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    SourceTable=Table50401;
+    PageType=Card;
+    OnAfterGetRecord=BEGIN
+                       BodyText := InboundMailMgt.GetBodyPlainText(Rec);
+                     END;
+
+    ActionList=ACTIONS
+    {
+      { 100     ;    ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 101     ;1   ;Action    ;
+                      Name=DownloadBody;
+                      CaptionML=[DEU=Text herunterladen;
+                                 ENU=Download Body];
+                      Promoted=Yes;
+                      Image=ExportAttachment;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 InboundMailMgt.DownloadBody(Rec);
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=General;
+                CaptionML=[DEU=Allgemein;
+                           ENU=General];
+                GroupType=Group }
+
+    { 3   ;2   ;Field     ;
+                SourceExpr="From Address" }
+
+    { 4   ;2   ;Field     ;
+                SourceExpr=Subject }
+
+    { 5   ;2   ;Field     ;
+                SourceExpr="Received At" }
+
+    { 10  ;1   ;Group     ;
+                Name=BodyGroup;
+                CaptionML=[DEU=Text;
+                           ENU=Body];
+                GroupType=Group }
+
+    { 11  ;2   ;Field     ;
+                Name=BodyText;
+                CaptionML=[DEU=Text;
+                           ENU=Body];
+                SourceExpr=BodyText;
+                MultiLine=Yes;
+                ShowCaption=No }
+
+  }
+  CODE
+  {
+    VAR
+      InboundMailMgt@1000 : Codeunit 50403;
+      BodyText@1001 : Text;
+
+    BEGIN
+    {
+      nav2016-mailgraph - Page 50408 "Graph Inbound Mail Body" (plain-text view of the body).
+      Not compiled in CI - compile and test in C/SIDE (NAV 2016) before use.
+
+      NMG2.00  initial version
+    }
+    END.
+  }
+}

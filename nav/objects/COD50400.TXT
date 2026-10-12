@@ -4,7 +4,7 @@ OBJECT Codeunit 50400 Graph Mail
   {
     Date=12.10.26;
     Time=12:00:00;
-    Version List=NMG1.00;
+    Version List=NMG2.00;
   }
   PROPERTIES
   {
@@ -19,6 +19,8 @@ OBJECT Codeunit 50400 Graph Mail
       MailManagement@1002 : Codeunit 9520;
       FileManagement@1003 : Codeunit 419;
       SendResult@1004 : Text;
+      LinkStorageClient@1005 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.ObjectStorageClient";
+      ObjectStorageMgt@1006 : Codeunit 50402;
       AttachmentNotFoundErr@1010 : TextConst 'DEU=Der Anhang %1 existiert nicht oder ist fr das Programm nicht zug„nglich.;ENU=Attachment %1 does not exist or can not be accessed from the program.';
       SendErr@1011 : TextConst 'DEU=Microsoft Graph hat folgenden Fehler gemeldet: %1;ENU=Microsoft Graph returned the following error: %1';
       NoMessageErr@1012 : TextConst 'DEU=Es wurde keine E-Mail-Nachricht erstellt. Rufen Sie zuerst CreateMessage auf.;ENU=No e-mail message has been created. Call CreateMessage first.';
@@ -354,12 +356,87 @@ OBJECT Codeunit 50400 Graph Mail
       GraphSender.SaveToSentItems := SMTPMailSetup."Graph Save to Sent Items";
       GraphSender.UseDraftForLargeMessages := SMTPMailSetup."Graph Large Messages";
       GraphSender.LogFilePath := SMTPMailSetup."Graph Log File Path";
+      IF SMTPMailSetup."Graph Link Threshold (MB)" > 0 THEN
+        ApplyLinkStorage(SMTPMailSetup);
     END;
 
     LOCAL PROCEDURE CheckMessageCreated@33();
     BEGIN
       IF ISNULL(GraphMessage) THEN
         ERROR(NoMessageErr);
+    END;
+
+    PROCEDURE CreateGraphConnection@34(VAR GraphConnection@1000 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphConnection");
+    VAR
+      SMTPMailSetup@1001 : Record 409;
+    BEGIN
+      // Maps the Table 409 Graph fields to NavMailGraph.GraphConnection (shared by Codeunits 50401-50403:
+      // mailbox polling and Azure Blob Entra ID mode). Same mapping as CreateSender.
+      IF NOT CANLOADTYPE(GraphConnection) THEN
+        ERROR(AddInMissingErr);
+      SMTPMailSetup.GET;
+      SMTPMailSetup.TESTFIELD("Graph Tenant ID");
+      SMTPMailSetup.TESTFIELD("Graph Client ID");
+
+      CLEAR(GraphConnection);
+      GraphConnection := GraphConnection.GraphConnection(SMTPMailSetup."Graph Tenant ID",SMTPMailSetup."Graph Client ID");
+
+      CASE SMTPMailSetup."Graph Auth Method" OF
+        SMTPMailSetup."Graph Auth Method"::"Client Secret":
+          BEGIN
+            IF NOT HasClientSecret(SMTPMailSetup) THEN
+              ERROR(SecretMissingErr);
+            GraphConnection.UseClientSecret(GetClientSecret(SMTPMailSetup));
+          END;
+        SMTPMailSetup."Graph Auth Method"::Certificate:
+          BEGIN
+            SMTPMailSetup.TESTFIELD("Graph Cert. Thumbprint");
+            GraphConnection.UseCertificateThumbprint(SMTPMailSetup."Graph Cert. Thumbprint");
+          END;
+      END;
+
+      CASE SMTPMailSetup."Graph Token Library" OF
+        SMTPMailSetup."Graph Token Library"::"Built-in":
+          GraphConnection.TokenLibrary := 'BuiltIn';
+        SMTPMailSetup."Graph Token Library"::MSAL:
+          GraphConnection.TokenLibrary := 'Msal';
+      END;
+
+      CASE SMTPMailSetup."Graph Cloud" OF
+        SMTPMailSetup."Graph Cloud"::"Global":
+          GraphConnection.Cloud := 'Global';
+        SMTPMailSetup."Graph Cloud"::"US Government":
+          GraphConnection.Cloud := 'USGov';
+        SMTPMailSetup."Graph Cloud"::"US Government DoD":
+          GraphConnection.Cloud := 'USGovDoD';
+        SMTPMailSetup."Graph Cloud"::China:
+          GraphConnection.Cloud := 'China';
+      END;
+
+      GraphConnection.LogFilePath := SMTPMailSetup."Graph Log File Path";
+    END;
+
+    LOCAL PROCEDURE ApplyLinkStorage@35(VAR SMTPMailSetup@1000 : Record 409);
+    VAR
+      StorageProfile@1003 : Record 50403;
+      ThresholdBytes@1001 : BigInteger;
+      ValidMinutes@1002 : Integer;
+    BEGIN
+      // NMG2.00: attachments >= "Graph Link Threshold (MB)" are uploaded to the object storage profile and replaced
+      // by a time-limited download link in the body. Read-only on the database (runs inside TryDoSend).
+      SMTPMailSetup.TESTFIELD("Graph Link Storage Profile");
+      ObjectStorageMgt.CreateClient(SMTPMailSetup."Graph Link Storage Profile",LinkStorageClient);
+      ThresholdBytes := SMTPMailSetup."Graph Link Threshold (MB)";
+      ThresholdBytes := ThresholdBytes * 1048576;
+      ValidMinutes := SMTPMailSetup."Graph Link Validity (Days)" * 1440;
+      IF ValidMinutes <= 0 THEN
+        ValidMinutes := 7 * 1440;
+      // Amazon S3 / S3-compatible: pre-signed URLs (SigV4) are valid for at most 7 days; a longer validity would
+      // make every send with a link fail, so it is limited here.
+      IF StorageProfile.GET(SMTPMailSetup."Graph Link Storage Profile") THEN
+        IF (StorageProfile.Provider = StorageProfile.Provider::"Amazon S3") AND (ValidMinutes > 7 * 1440) THEN
+          ValidMinutes := 7 * 1440;
+      GraphSender.UseLinkStorage(LinkStorageClient,ThresholdBytes,ValidMinutes,'');
     END;
 
     BEGIN
@@ -376,10 +453,12 @@ OBJECT Codeunit 50400 Graph Mail
       Additional: IsEnabled, TestConnection, ShowConnectionTest, SendTestMail, SetClientSecret, GetClientSecret,
       HasClientSecret, DeleteClientSecret, RaiseSMTPMessageNotSupported, GetAddInVersion.
 
-      Requires the Table 409 fields 50100..50112 from nav/patches/TAB409.md.
+      Requires the Table 409 fields 50100..50115 from nav/patches/TAB409.md.
       Not compiled in CI - compile and test in C/SIDE (NAV 2016) before use.
 
       NMG1.00  initial version
+      NMG2.00  CreateGraphConnection (for Codeunits 50401-50403); large attachments as download link through
+               object storage when "Graph Link Threshold (MB)" > 0 (GraphMailSender.UseLinkStorage)
     }
     END.
   }

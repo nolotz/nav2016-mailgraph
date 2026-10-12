@@ -51,6 +51,7 @@ dotnet publish src/NavMailGraph.Msal/NavMailGraph.Msal.csproj -c "$CONFIG" -f ne
 rm -f dist/Add-ins/NavMailGraph/Msal/NavMailGraph.dll dist/Add-ins/NavMailGraph/Msal/NavMailGraph.pdb dist/Add-ins/NavMailGraph/Msal/NavMailGraph.xml
 find dist -name '*.pdb' -delete
 mkdir -p dist/nav && cp -R nav/. dist/nav/
-( cd dist && find Add-ins nav -type f | sort | xargs $SHA256 > SHA256SUMS )
+mkdir -p dist/deploy && cp deploy/*.ps1 deploy/README.md deploy/s3-iam-policy.json dist/deploy/
+( cd dist && find Add-ins nav deploy -type f | sort | xargs $SHA256 > SHA256SUMS )
 echo "==> done: $(find dist/Add-ins -type f | wc -l | tr -d ' ') files in dist/Add-ins"
 cat dist/SHA256SUMS

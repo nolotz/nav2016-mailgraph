@@ -173,6 +173,67 @@ namespace NavMailGraph
             AddFileAttachment(filePath, fileName, true, (contentId ?? "").Trim());
         }
 
+        /// <summary>
+        /// Adds an attachment stored in object storage (e.g. an archived document): <see cref="GraphMailSender.Send"/> downloads
+        /// <paramref name="objectKey"/> (relative to the storage's KeyPrefix) into a temp file, attaches it and deletes the temp file
+        /// afterwards (also when sending fails). <paramref name="fileName"/> "" = the last segment of the key. The storage client is
+        /// used at send time with its settings at that moment. Until Send the size is unknown (TotalAttachmentBytes counts 0).
+        /// Throws <see cref="ArgumentNullException"/> only for a null <paramref name="storage"/>; other problems are reported by Send.
+        /// </summary>
+        public void AddAttachmentFromStorage(ObjectStorageClient storage, string objectKey, string fileName)
+        {
+            if (storage == null)
+            {
+                throw new ArgumentNullException(nameof(storage));
+            }
+
+            string key = objectKey ?? "";
+            if (key.Trim().Length == 0)
+            {
+                _validationErrors.Add("Attachment object key is empty" + (fileName != null && fileName.Trim().Length > 0 ? " for '" + fileName.Trim() + "'" : "") + ".");
+                return;
+            }
+
+            string name = (fileName ?? "").Trim();
+            if (name.Length == 0)
+            {
+                int slash = key.LastIndexOf('/');
+                name = (slash >= 0 ? key.Substring(slash + 1) : key).Trim();
+                if (name.Trim().Length == 0)
+                {
+                    _validationErrors.Add("Attachment file name could not be derived from object key '" + key + "'.");
+                    return;
+                }
+            }
+
+            _attachments.Add(MailAttachment.FromStorage(storage, key, name, ContentTypes.FromFileName(name)));
+        }
+
+        /// <summary>
+        /// Copy for one send attempt with another body/format and attachment list (link storage, storage attachments); the
+        /// original builder is not changed, so a repeated Send starts from the same message.
+        /// </summary>
+        internal GraphMailMessage CloneForSend(string body, List<MailAttachment> attachments)
+        {
+            var copy = new GraphMailMessage
+            {
+                _fromName = _fromName,
+                _fromAddress = _fromAddress,
+                _subject = _subject,
+                _importance = _importance,
+                HtmlFormatted = HtmlFormatted,
+            };
+            copy._to.AddRange(_to);
+            copy._cc.AddRange(_cc);
+            copy._bcc.AddRange(_bcc);
+            copy._replyTo.AddRange(_replyTo);
+            copy._headers.AddRange(_headers);
+            copy._validationErrors.AddRange(_validationErrors);
+            copy._attachments.AddRange(attachments);
+            copy._body.Append(body);
+            return copy;
+        }
+
         /// <summary>Adds a custom internet message header. Graph requires the name to start with "x-" or "X-".</summary>
         public void AddHeader(string name, string value)
         {

@@ -1,0 +1,21 @@
+# Local storage emulators for the NavMailGraph integration tests (see README.md in this folder).
+# Test-only credentials; never use them for anything real.
+name: nmg-integration
+
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.37.0
+    command: ["azurite-blob", "--blobHost", "0.0.0.0", "--blobPort", "10000", "--inMemoryPersistence", "--loose"]
+    ports:
+      - "127.0.0.1:10000:10000"
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.48
+    # all-in-one master + volume + filer + S3 gateway; identities file enables SigV4 auth
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/etc/seaweedfs/s3-identities.json", "-volume.max=0", "-master.volumeSizeLimitMB=64", "-master.volumePreallocate=false"]
+    ports:
+      - "127.0.0.1:8333:8333"
+    volumes:
+      - ./s3-identities.json:/etc/seaweedfs/s3-identities.json:ro
+    tmpfs:
+      - /data

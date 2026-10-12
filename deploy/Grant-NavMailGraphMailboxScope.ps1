@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-    Grants the NavMailGraph app "Application Mail.Send" (and optionally Mail.ReadWrite) in Exchange Online,
-    restricted to specific mailboxes (RBAC for Applications).
+    Grants the NavMailGraph app "Application Mail.Send" (and optionally Mail.Read / Mail.ReadWrite) in Exchange
+    Online, restricted to specific mailboxes (RBAC for Applications).
 
 .DESCRIPTION
     Scoped design (recommended): the app has NO Microsoft Graph application permission in Entra ID; Exchange
@@ -19,16 +19,19 @@
                      mail-enabled security groups and distribution lists; Entra-only security groups do not work).
          An existing scope with the same name and filter is reused; a different filter stops the script.
       4. New-ManagementRoleAssignment -App <service principal object id> -Role 'Application Mail.Send'
-         -CustomResourceScope <scope>, plus 'Application Mail.ReadWrite' with -IncludeReadWrite (needed for the
-         draft / upload-session flow used for messages larger than about 3.5 MB). Existing assignments with the
+         -CustomResourceScope <scope>, plus 'Application Mail.Read' with -IncludeRead (reading mail: list, delta,
+         get message, attachments) and 'Application Mail.ReadWrite' with -IncludeReadWrite (needed for the
+         draft / upload-session flow used for messages larger than about 3.5 MB, and for reading mail with
+         post-processing: mark as read, move, delete, create folder). Existing assignments with the
          same name are reused only if their CustomResourceScope is <ScopeName>; a same-named assignment with
-         another or no scope (organization-wide) stops the script. Without -IncludeReadWrite an existing
-         "<ScopeName> Mail.ReadWrite" assignment from an earlier run is reported (warning) and listed in the
-         output; it is not removed (use Remove-NavMailGraphMailboxScope.ps1 or Remove-ManagementRoleAssignment).
+         another or no scope (organization-wide) stops the script. Without -IncludeRead / -IncludeReadWrite an
+         existing "<ScopeName> Mail.Read" / "<ScopeName> Mail.ReadWrite" assignment from an earlier run is
+         reported (warning) and listed in the output; it is not removed (use Remove-NavMailGraphMailboxScope.ps1
+         or Remove-ManagementRoleAssignment).
          Every created object is read back before it is reported as created.
       5. Test-ServicePrincipalAuthorization -Identity <sp> -Resource <mailbox>: expects InScope = True for the
          sender mailbox(es) and InScope = False for -NegativeTestMailbox.
-      6. Warns if the app ALSO has a tenant-wide Graph Mail.Send / Mail.ReadWrite grant in Entra ID (that grant
+      6. Warns if the app ALSO has a tenant-wide Graph Mail.Send / Mail.Read / Mail.ReadWrite grant in Entra ID (that grant
          and the Exchange grant are combined, so the scoping would have no effect). Checked automatically when a
          Microsoft Graph PowerShell session is connected (Get-MgContext) to the same tenant as the Exchange
          Online session (Get-ConnectionInformation TenantID), otherwise a manual check is printed. If the check
@@ -42,8 +45,8 @@
     Permission changes take 30 minutes to 2 hours to become effective for real Graph calls (Exchange permission
     cache). Test-ServicePrincipalAuthorization bypasses that cache. Do not debug HTTP 403 inside that window.
 
-    Assignment names: "<ScopeName> Mail.Send" and "<ScopeName> Mail.ReadWrite" (the scope part is shortened so
-    the name stays within 64 characters). Remove-NavMailGraphMailboxScope.ps1 uses the same rule.
+    Assignment names: "<ScopeName> Mail.Send", "<ScopeName> Mail.Read" and "<ScopeName> Mail.ReadWrite" (the
+    scope part is shortened so the name stays within 64 characters). Remove-NavMailGraphMailboxScope.ps1 uses the same rule.
 
 .PARAMETER AppId
     Application (client) id of the app registration.
@@ -67,8 +70,15 @@
 .PARAMETER ScopeName
     Name of the management scope (max 64 characters). Default: "NavMailGraph <DisplayName>" (shortened).
 
+.PARAMETER IncludeRead
+    Also assign 'Application Mail.Read': read messages and attachments in the scoped mailboxes (NAV mail import
+    with "After Import" = Nothing; read-only). Marking messages as read, moving them to a Processed/Error
+    folder, deleting them or creating folders needs Mail.ReadWrite (-IncludeReadWrite) instead; Mail.ReadWrite
+    includes reading, so -IncludeRead is then not needed.
+
 .PARAMETER IncludeReadWrite
-    Also assign 'Application Mail.ReadWrite' (large attachments / draft flow, NAV field "Graph Large Messages").
+    Also assign 'Application Mail.ReadWrite' (large attachments / draft flow, NAV field "Graph Large Messages";
+    reading mail with mark as read / move / delete).
 
 .PARAMETER TestMailbox
     Group mode: mailbox used for the positive authorization test. Default: the first group member found.
@@ -92,6 +102,13 @@
 .EXAMPLE
     ./Grant-NavMailGraphMailboxScope.ps1 -AppId 1111... -ServicePrincipalObjectId 6666... `
         -Mailbox nav@contoso.com, invoices@contoso.com -IncludeReadWrite -ScopeName 'NAV2016 senders'
+
+.EXAMPLE
+    ./Grant-NavMailGraphMailboxScope.ps1 -AppId 1111... -ServicePrincipalObjectId 6666... `
+        -Mailbox invoices-in@contoso.com -IncludeRead -NegativeTestMailbox ceo@contoso.com
+
+    Send and read-only import for invoices-in@contoso.com. Use -IncludeReadWrite instead of -IncludeRead if the
+    import should mark, move or delete the processed messages.
 
 .EXAMPLE
     $dn = (Get-DistributionGroup 'NAV Senders').DistinguishedName
@@ -122,6 +139,8 @@ param(
     [ValidateLength(1, 64)]
     [string] $ScopeName,
 
+    [switch] $IncludeRead,
+
     [switch] $IncludeReadWrite,
 
     [Parameter(ParameterSetName = 'Group')]
@@ -139,6 +158,7 @@ $ErrorActionPreference = 'Stop'
 
 $MailSendRoleId = 'b633e1c5-b582-4048-a93e-9f11b44c7e96'
 $MailReadWriteRoleId = 'e2a3a72e-5f79-4c64-b1b1-878b674786c9'
+$MailReadRoleId = '810c84a8-4a9e-49e6-bf7d-12d183f40d01'   # Graph application permission Mail.Read
 
 # ---------------------------------------------------------------- helpers
 function Get-Prop {
@@ -211,6 +231,7 @@ if (-not $graphConnected -and -not $ServicePrincipalObjectId) {
 }
 
 $roles = @('Application Mail.Send')
+if ($IncludeRead) { $roles += 'Application Mail.Read' }
 if ($IncludeReadWrite) { $roles += 'Application Mail.ReadWrite' }
 
 # ---------------------------------------------------------------- connect
@@ -371,12 +392,14 @@ function Get-NamedAssignment {
 $assignmentNames = @()
 $testRoles = @($roles)
 $readWriteLeftOver = $false
+$readLeftOver = $false
 $ids = @($spId, $AppId.ToString(), $DisplayName)
 if ($exoSp) { $ids += [string](Get-Prop $exoSp 'Identity'); $ids += [string](Get-Prop $exoSp 'Name') }
 $ids = @($ids | Where-Object { $_ })
 
-# Mail.ReadWrite is always inspected: without -IncludeReadWrite it is only reported (left over from an earlier run).
-foreach ($role in @('Application Mail.Send', 'Application Mail.ReadWrite')) {
+# Mail.Read and Mail.ReadWrite are always inspected: without -IncludeRead / -IncludeReadWrite they are only reported
+# (left over from an earlier run).
+foreach ($role in @('Application Mail.Send', 'Application Mail.Read', 'Application Mail.ReadWrite')) {
     $wanted = $roles -contains $role
     $name = Get-AssignmentName -Scope $ScopeName -Suffix ($role -replace '^Application ', '')
     $found = Get-NamedAssignment -Role $role -Name $name
@@ -405,9 +428,10 @@ foreach ($role in @('Application Mail.Send', 'Application Mail.ReadWrite')) {
             Write-Host ("Role assignment '{0}' already exists" -f $name)
         }
         else {
-            $readWriteLeftOver = $true
+            if ($role -eq 'Application Mail.ReadWrite') { $readWriteLeftOver = $true; $switchName = '-IncludeReadWrite' }
+            else { $readLeftOver = $true; $switchName = '-IncludeRead' }
             $testRoles += $role
-            Write-Warning ("Role assignment '{0}' ({1}) from an earlier run still exists although -IncludeReadWrite was not given; the app keeps Mail.ReadWrite on the scoped mailboxes. Remove it with: Remove-ManagementRoleAssignment -Identity '{0}' -Confirm:`$false" -f $name, $role)
+            Write-Warning ("Role assignment '{0}' ({1}) from an earlier run still exists although {2} was not given; the app keeps {3} on the scoped mailboxes. Remove it with: Remove-ManagementRoleAssignment -Identity '{0}' -Confirm:`$false" -f $name, $role, $switchName, ($role -replace '^Application ', ''))
         }
     }
     elseif (-not $wanted) {
@@ -429,6 +453,12 @@ foreach ($role in @('Application Mail.Send', 'Application Mail.ReadWrite')) {
 }
 if (-not $IncludeReadWrite -and -not $readWriteLeftOver) {
     Write-Host "Info: without 'Application Mail.ReadWrite' set NAV 'Graph Large Messages' = No; messages above ~3.5 MB are then rejected with a clear error."
+    if ($IncludeRead -or $readLeftOver) {
+        Write-Host "Info: 'Application Mail.Read' allows reading only. A mail import that marks messages as read, moves them (Processed/Error folder), deletes them or creates folders needs 'Application Mail.ReadWrite' (-IncludeReadWrite)."
+    }
+}
+elseif ($IncludeRead -and $IncludeReadWrite) {
+    Write-Host "Info: 'Application Mail.ReadWrite' already includes reading; 'Application Mail.Read' is not needed in addition (it does no harm)."
 }
 
 # ---------------------------------------------------------------- 5. authorization tests
@@ -465,25 +495,25 @@ $checked = $false
 if ($graphConnected -and (Get-Command Get-MgServicePrincipalAppRoleAssignment -ErrorAction SilentlyContinue)) {
     try {
         $grants = @(Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $spId -All -ErrorAction Stop |
-                Where-Object { @($MailSendRoleId, $MailReadWriteRoleId) -contains [string]$_.AppRoleId })
+                Where-Object { @($MailSendRoleId, $MailReadRoleId, $MailReadWriteRoleId) -contains [string]$_.AppRoleId })
         $checked = $true
     }
     catch {
-        Write-Warning ("Entra ID check: could NOT verify whether the app has a tenant-wide Graph Mail.Send / Mail.ReadWrite grant: {0}" -f $_.Exception.Message)
+        Write-Warning ("Entra ID check: could NOT verify whether the app has a tenant-wide Graph Mail.Send / Mail.Read / Mail.ReadWrite grant: {0}" -f $_.Exception.Message)
     }
     if ($checked) {
         $tenantWide = $grants.Count -gt 0
         if ($tenantWide) {
-            Write-Warning ("The app ALSO has tenant-wide Microsoft Graph application permission(s) in Entra ID ({0}). Entra and Exchange grants are combined, so the mailbox scope has NO effect. Remove the Graph Mail.* application permission/consent from the app (Entra admin center > Enterprise applications > app > Permissions) or with Remove-MgServicePrincipalAppRoleAssignment." -f (($grants | ForEach-Object { if ([string]$_.AppRoleId -eq $MailSendRoleId) { 'Mail.Send' } else { 'Mail.ReadWrite' } }) -join ', '))
+            Write-Warning ("The app ALSO has tenant-wide Microsoft Graph application permission(s) in Entra ID ({0}). Entra and Exchange grants are combined, so the mailbox scope has NO effect. Remove the Graph Mail.* application permission/consent from the app (Entra admin center > Enterprise applications > app > Permissions) or with Remove-MgServicePrincipalAppRoleAssignment." -f (($grants | ForEach-Object { switch ([string]$_.AppRoleId) { $MailSendRoleId { 'Mail.Send' } $MailReadRoleId { 'Mail.Read' } default { 'Mail.ReadWrite' } } }) -join ', '))
         }
         else {
-            Write-Host 'Entra ID check: no tenant-wide Graph Mail.Send / Mail.ReadWrite grant on the service principal. Good.' -ForegroundColor Green
+            Write-Host 'Entra ID check: no tenant-wide Graph Mail.Send / Mail.Read / Mail.ReadWrite grant on the service principal. Good.' -ForegroundColor Green
         }
     }
 }
 if (-not $checked) {
     Write-Host 'Manual check required (tenant-wide grant NOT verified): Entra admin center > Enterprise applications >' -ForegroundColor Yellow
-    Write-Host ("  '{0}' > Permissions must NOT list Microsoft Graph 'Mail.Send' or 'Mail.ReadWrite' (Application) with admin consent." -f $DisplayName) -ForegroundColor Yellow
+    Write-Host ("  '{0}' > Permissions must NOT list Microsoft Graph 'Mail.Send', 'Mail.Read' or 'Mail.ReadWrite' (Application) with admin consent." -f $DisplayName) -ForegroundColor Yellow
     Write-Host ("  Or: Connect-MgGraph -TenantId <tenant> -Scopes Application.Read.All; Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId {0}" -f $spId) -ForegroundColor Yellow
 }
 

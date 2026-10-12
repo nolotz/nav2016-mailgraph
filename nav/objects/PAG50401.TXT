@@ -1,0 +1,207 @@
+OBJECT Page 50401 Graph Inbound Mails
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    Editable=No;
+    CaptionML=[DEU=Graph-Posteingang;
+               ENU=Graph Inbound Mails];
+    SourceTable=Table50401;
+    SourceTableView=SORTING(Entry No.)
+                    ORDER(Descending);
+    PageType=List;
+    CardPageID=Graph Inbound Mail;
+    OnAfterGetRecord=BEGIN
+                       CASE Status OF
+                         Status::Error:
+                           StatusStyle := 'Unfavorable';
+                         Status::Processed:
+                           StatusStyle := 'Favorable';
+                         ELSE
+                           StatusStyle := 'Standard';
+                       END;
+                     END;
+
+    ActionList=ACTIONS
+    {
+      { 100     ;    ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 101     ;1   ;Action    ;
+                      Name=ShowBody;
+                      CaptionML=[DEU=Text anzeigen;
+                                 ENU=Show Body];
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Document;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 InboundMailMgt.ShowBody(Rec);
+                               END;
+                                }
+      { 102     ;1   ;Action    ;
+                      Name=DownloadBody;
+                      CaptionML=[DEU=Text herunterladen;
+                                 ENU=Download Body];
+                      Image=ExportAttachment;
+                      OnAction=BEGIN
+                                 InboundMailMgt.DownloadBody(Rec);
+                               END;
+                                }
+      { 103     ;1   ;Action    ;
+                      Name=ExportEml;
+                      CaptionML=[DEU=Als .eml exportieren;
+                                 ENU=Export as .eml];
+                      Promoted=Yes;
+                      Image=Archive;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 InboundMailMgt.ExportEml(Rec);
+                               END;
+                                }
+      { 104     ;1   ;Action    ;
+                      Name=OpenInOutlook;
+                      CaptionML=[DEU=In Outlook anzeigen;
+                                 ENU=Show in Outlook];
+                      Promoted=Yes;
+                      Image=Navigate;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 InboundMailMgt.OpenInOutlook(Rec);
+                               END;
+                                }
+      { 105     ;1   ;Action    ;
+                      Name=MarkProcessed;
+                      CaptionML=[DEU=Als verarbeitet markieren;
+                                 ENU=Mark as Processed];
+                      Promoted=Yes;
+                      Image=Approve;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 InboundMail@1000 : Record 50401;
+                               BEGIN
+                                 CurrPage.SETSELECTIONFILTER(InboundMail);
+                                 IF InboundMail.FINDSET(TRUE) THEN
+                                   REPEAT
+                                     InboundMailMgt.MarkProcessed(InboundMail);
+                                   UNTIL InboundMail.NEXT = 0;
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 106     ;1   ;Action    ;
+                      Name=Reprocess;
+                      CaptionML=[DEU=Erneut verarbeiten;
+                                 ENU=Reprocess];
+                      Promoted=Yes;
+                      Image=Restore;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 InboundMailMgt.Reprocess(Rec);
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 110     ;    ;ActionContainer;
+                      ActionContainerType=RelatedInformation }
+      { 111     ;1   ;Action    ;
+                      Name=Attachments;
+                      CaptionML=[DEU=Anh„nge;
+                                 ENU=Attachments];
+                      RunObject=Page 50406;
+                      RunPageLink=Mail Entry No.=FIELD(Entry No.);
+                      Promoted=Yes;
+                      Image=Attach;
+                      PromotedCategory=Process }
+      { 112     ;1   ;Action    ;
+                      Name=MailboxSetup;
+                      CaptionML=[DEU=Postfacheinrichtung;
+                                 ENU=Mailbox Setup];
+                      RunObject=Page 50405;
+                      RunPageLink=Code=FIELD(Mailbox Code);
+                      Image=Setup }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 2   ;1   ;Group     ;
+                Name=Group;
+                GroupType=Repeater }
+
+    { 3   ;2   ;Field     ;
+                SourceExpr="Entry No." }
+
+    { 4   ;2   ;Field     ;
+                SourceExpr="Received At" }
+
+    { 5   ;2   ;Field     ;
+                SourceExpr="Mailbox Code" }
+
+    { 6   ;2   ;Field     ;
+                SourceExpr="From Address" }
+
+    { 7   ;2   ;Field     ;
+                SourceExpr="From Name";
+                Visible=FALSE }
+
+    { 8   ;2   ;Field     ;
+                SourceExpr=Subject }
+
+    { 9   ;2   ;Field     ;
+                SourceExpr=Status;
+                StyleExpr=StatusStyle }
+
+    { 10  ;2   ;Field     ;
+                SourceExpr="Error Text" }
+
+    { 11  ;2   ;Field     ;
+                SourceExpr="No. of Attachments" }
+
+    { 12  ;2   ;Field     ;
+                SourceExpr="Mailbox Action" }
+
+    { 13  ;2   ;Field     ;
+                SourceExpr="Current Folder";
+                Visible=FALSE }
+
+    { 14  ;2   ;Field     ;
+                SourceExpr="Imported At";
+                Visible=FALSE }
+
+    { 15  ;2   ;Field     ;
+                SourceExpr="Body Preview";
+                Visible=FALSE }
+
+    { 20  ;0   ;Container ;
+                ContainerType=FactBoxArea }
+
+    { 21  ;1   ;Part      ;
+                Name=AttachmentsFactBox;
+                CaptionML=[DEU=Anh„nge;
+                           ENU=Attachments];
+                SubPageLink=Mail Entry No.=FIELD(Entry No.);
+                PagePartID=Page50403;
+                PartType=Page }
+
+  }
+  CODE
+  {
+    VAR
+      InboundMailMgt@1000 : Codeunit 50403;
+      StatusStyle@1001 : Text;
+
+    BEGIN
+    {
+      nav2016-mailgraph - Page 50401 "Graph Inbound Mails" (list, card = Page 50402).
+      Not compiled in CI - compile and test in C/SIDE (NAV 2016) before use.
+
+      NMG2.00  initial version
+    }
+    END.
+  }
+}

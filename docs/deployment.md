@@ -11,6 +11,7 @@ The NAV objects themselves are covered in [../nav/README.md](../nav/README.md).
 | .NET Framework | **4.6.2 or later** (registry `Release` ≥ 394802); 4.8 recommended | `Install-NavMailGraphAddin.ps1` checks it |
 | TLS 1.2 | to `login.microsoftonline.com` and `graph.microsoft.com` (Entra ID refuses TLS 1.0/1.1) | see [TLS](#tls-12) |
 | Outbound HTTPS | `login.microsoftonline.com`, `graph.microsoft.com`, and `outlook.office.com` (upload sessions for large attachments); other hosts for national clouds | – |
+| Outbound HTTPS, object storage (optional, v0.2) | Azure: `https://<account>.<BlobEndpointSuffix>` (default `<account>.blob.core.windows.net`; China `blob.core.chinacloudapi.cn`, US Gov `blob.core.usgovcloudapi.net`) or the profile's `ServiceUrl`; Entra ID mode additionally gets its token from the Entra host above (scope `https://storage.azure.com/.default`). S3: the service URL, e.g. `s3.<region>.amazonaws.com` (path-style) or `<bucket>.s3.<region>.amazonaws.com` (virtual-hosted), or the endpoint of the S3-compatible provider. Same proxy rules as for Graph | *Test Connection* on the storage profile, `nmg storage test` |
 | Certificate | `.pfx` from `New-NavMailGraphCertificate.ps1` or your PKI ([azure-setup.md](azure-setup.md)) | – |
 | Payload | `dist/Add-ins/NavMailGraph/` from `./build.sh` or from the release zip | `SHA256SUMS` |
 
@@ -44,9 +45,10 @@ C:\Program Files (x86)\Microsoft Dynamics NAV\90\RoleTailored Client\Add-ins\Nav
 
 `deploy/Install-NavMailGraphAddin.ps1` (Windows PowerShell 5.1 or PowerShell 7 on Windows, **elevated**).
 
-The release zip contains `Add-ins/`, `nav/` and `SHA256SUMS`, not the `deploy/` scripts. Copy
-`Install-NavMailGraphAddin.ps1` from the repository into the extracted release folder (next to `Add-ins`), or pass
-`-SourcePath`. In a repository checkout after `./build.sh`, the script finds `..\dist\Add-ins\NavMailGraph` itself.
+The release zip contains `Add-ins/`, `nav/`, `deploy/` (the PowerShell scripts, `deploy/README.md` and
+`s3-iam-policy.json`) and `SHA256SUMS`. Run the script from the extracted `deploy\` folder: it finds
+`..\Add-ins\NavMailGraph` and `..\SHA256SUMS` itself (or pass `-SourcePath`). In a repository checkout after
+`./build.sh`, it finds `..\dist\Add-ins\NavMailGraph`.
 
 ```powershell
 # dry run

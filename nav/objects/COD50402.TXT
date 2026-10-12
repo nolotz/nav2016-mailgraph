@@ -1,0 +1,437 @@
+OBJECT Codeunit 50402 Object Storage Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12.10.26;
+    Time=12:00:00;
+    Version List=NMG2.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 1261=rimd;
+  }
+  CODE
+  {
+    VAR
+      StorageClient@1000 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.ObjectStorageClient";
+      GraphConnection@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.GraphConnection";
+      GraphMail@1002 : Codeunit 50400;
+      FileManagement@1003 : Codeunit 419;
+      LastErrorText@1004 : Text;
+      AddInMissingErr@1010 : TextConst 'DEU=Das Add-In NavMailGraph.dll (Version 1.0.0.0) kann auf dem Server nicht geladen werden. Kopieren Sie es in den Ordner Add-ins des Microsoft Dynamics NAV Servers, und starten Sie die Serverinstanz neu.;ENU=The add-in NavMailGraph.dll (version 1.0.0.0) cannot be loaded on the server. Copy it to the Add-ins folder of the Microsoft Dynamics NAV Server and restart the server instance.';
+      StorageErr@1011 : TextConst 'DEU=Der Objektspeicher hat folgenden Fehler gemeldet: %1;ENU=The object storage returned the following error: %1';
+      SecretMissingErr@1012 : TextConst 'DEU=FÅr das Objektspeicherprofil %1 ist kein Geheimnis gespeichert (KontoschlÅssel, SAS-URL oder geheimer ZugriffsschlÅssel).;ENU=No secret is stored for object storage profile %1 (account key, SAS URL or secret access key).';
+      SecretNotEncryptedMsg@1013 : TextConst 'DEU=Das Geheimnis wurde gespeichert, aber nicht verschlÅsselt, da fÅr diese Datenbank kein VerschlÅsselungsschlÅssel vorhanden ist. Richten Sie die DatenverschlÅsselung ein.;ENU=The secret was stored, but it is not encrypted because no encryption key exists for this database. Set up data encryption.';
+      ConnectionOkMsg@1014 : TextConst 'DEU=Die Verbindung zum Objektspeicher %1 war erfolgreich.;ENU=The connection to object storage %1 succeeded.';
+      ConnectionFailedErr@1015 : TextConst 'DEU=Der Verbindungstest ist fehlgeschlagen: %1;ENU=The connection test failed: %1';
+      TestFileOkMsg@1016 : TextConst 'DEU=Die Testdatei %1 wurde hochgeladen (%2 Bytes), gefunden und wieder gelîscht.;ENU=The test file %1 was uploaded (%2 bytes), found and deleted again.';
+      TestFileNotFoundErr@1017 : TextConst 'DEU=Die Testdatei %1 wurde hochgeladen, aber nicht gefunden.;ENU=The test file %1 was uploaded but could not be found.';
+      TestFileTxt@1018 : TextConst 'DEU=Testdatei aus Microsoft Dynamics NAV (nav2016-mailgraph). Kann gelîscht werden.;ENU=Test file from Microsoft Dynamics NAV (nav2016-mailgraph). Can be deleted.';
+      UnknownErr@1019 : TextConst 'DEU=Unbekannter Fehler.;ENU=Unknown error.';
+
+    PROCEDURE CreateClient@1(ProfileCode@1000 : Code[20];VAR NewStorageClient@1001 : DotNet "'NavMailGraph, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.NavMailGraph.ObjectStorageClient");
+    VAR
+      StorageProfile@1002 : Record 50403;
+      MegaByte@1003 : BigInteger;
+      Region@1004 : Text;
+    BEGIN
+      // Maps Table 50403 to NavMailGraph.ObjectStorageClient. Raises an error for configuration problems only;
+      // the client itself never throws (operations return '' or an error text).
+      IF NOT CANLOADTYPE(NewStorageClient) THEN
+        ERROR(AddInMissingErr);
+      StorageProfile.GET(ProfileCode);
+      CLEAR(NewStorageClient);
+      NewStorageClient := NewStorageClient.ObjectStorageClient;
+
+      CASE StorageProfile.Provider OF
+        StorageProfile.Provider::"Azure Blob Shared Key":
+          BEGIN
+            StorageProfile.TESTFIELD("Account Name");
+            StorageProfile.TESTFIELD("Container Name");
+            CheckSecret(StorageProfile);
+            NewStorageClient.UseAzureBlobSharedKey(
+              StorageProfile."Account Name",GetSecret(StorageProfile),StorageProfile."Container Name");
+          END;
+        StorageProfile.Provider::"Azure Blob SAS URL":
+          BEGIN
+            // The secret is the container SAS URL (https://account.blob.core.windows.net/container?sv=...).
+            CheckSecret(StorageProfile);
+            NewStorageClient.UseAzureBlobSasUrl(GetSecret(StorageProfile));
+          END;
+        StorageProfile.Provider::"Azure Blob Entra ID":
+          BEGIN
+            // Uses the Graph app registration of Table 409; the app needs "Storage Blob Data Contributor".
+            StorageProfile.TESTFIELD("Account Name");
+            StorageProfile.TESTFIELD("Container Name");
+            GraphMail.CreateGraphConnection(GraphConnection);
+            NewStorageClient.UseAzureBlobEntra(GraphConnection,StorageProfile."Account Name",StorageProfile."Container Name");
+          END;
+        StorageProfile.Provider::"Amazon S3":
+          BEGIN
+            StorageProfile.TESTFIELD("Container Name");
+            StorageProfile.TESTFIELD("Access Key ID");
+            CheckSecret(StorageProfile);
+            Region := StorageProfile.Region;
+            IF Region = '' THEN
+              Region := 'us-east-1';
+            NewStorageClient.UseS3(
+              StorageProfile."Service URL",Region,StorageProfile."Container Name",StorageProfile."Access Key ID",
+              GetSecret(StorageProfile));
+            CASE StorageProfile."S3 Addressing" OF
+              StorageProfile."S3 Addressing"::"Path Style":
+                NewStorageClient.S3PathStyle := TRUE;
+              StorageProfile."S3 Addressing"::"Virtual Hosted Style":
+                NewStorageClient.S3PathStyle := FALSE;
+            END;
+          END;
+      END;
+
+      // Options are set after Use...; they only change defaults.
+      IF (StorageProfile."Service URL" <> '') AND (StorageProfile.Provider <> StorageProfile.Provider::"Amazon S3") THEN
+        NewStorageClient.ServiceUrl := StorageProfile."Service URL";
+      IF StorageProfile."Blob Endpoint Suffix" <> '' THEN
+        NewStorageClient.BlobEndpointSuffix := StorageProfile."Blob Endpoint Suffix";
+      IF StorageProfile."Azure API Version" <> '' THEN
+        NewStorageClient.AzureApiVersion := StorageProfile."Azure API Version";
+      NewStorageClient.KeyPrefix := StorageProfile."Key Prefix";
+      MegaByte := 1048576;
+      IF StorageProfile."Multipart Threshold (MB)" > 0 THEN
+        NewStorageClient.MultipartThresholdBytes := StorageProfile."Multipart Threshold (MB)" * MegaByte;
+      IF StorageProfile."Part Size (MB)" > 0 THEN
+        NewStorageClient.PartSizeBytes := StorageProfile."Part Size (MB)" * 1048576;
+      IF StorageProfile."Timeout (sec.)" > 0 THEN
+        NewStorageClient.TimeoutSeconds := StorageProfile."Timeout (sec.)";
+      NewStorageClient.MaxRetries := StorageProfile."Max. Retries";
+      NewStorageClient.LogFilePath := StorageProfile."Log File Path";
+    END;
+
+    PROCEDURE UploadFile@2(ProfileCode@1000 : Code[20];FilePath@1001 : Text;ObjectKey@1002 : Text;ContentType@1003 : Text);
+    BEGIN
+      // FilePath is a file on the NAV Server. ContentType '' = by file extension.
+      CreateClient(ProfileCode,StorageClient);
+      CheckResult(StorageClient.UploadFile(FilePath,ObjectKey,ContentType));
+    END;
+
+    PROCEDURE TryUploadFile@3(ProfileCode@1000 : Code[20];FilePath@1001 : Text;ObjectKey@1002 : Text;ContentType@1003 : Text) : Boolean;
+    BEGIN
+      StartTry;
+      IF TryDoUploadFile(ProfileCode,FilePath,ObjectKey,ContentType) THEN
+        EXIT(TRUE);
+      EXIT(EndTryFailed);
+    END;
+
+    PROCEDURE UploadBlob@4(ProfileCode@1000 : Code[20];VAR TempBlob@1001 : Record 99008535;ObjectKey@1002 : Text;ContentType@1003 : Text);
+    VAR
+      InStr@1004 : InStream;
+    BEGIN
+      // TempBlob: a TEMPORARY TempBlob filled through Blob.CREATEOUTSTREAM (no CALCFIELDS needed), or a
+      // database record after CALCFIELDS. The add-in reads the stream (S3 multipart / Azure blocks when large).
+      CreateClient(ProfileCode,StorageClient);
+      TempBlob.Blob.CREATEINSTREAM(InStr);
+      CheckResult(StorageClient.UploadStream(InStr,ObjectKey,ContentType));
+    END;
+
+    PROCEDURE TryUploadBlob@5(ProfileCode@1000 : Code[20];VAR TempBlob@1001 : Record 99008535;ObjectKey@1002 : Text;ContentType@1003 : Text) : Boolean;
+    BEGIN
+      StartTry;
+      IF TryDoUploadBlob(ProfileCode,TempBlob,ObjectKey,ContentType) THEN
+        EXIT(TRUE);
+      EXIT(EndTryFailed);
+    END;
+
+    PROCEDURE DownloadToBlob@6(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text;VAR TempBlob@1002 : Record 99008535);
+    VAR
+      OutStr@1003 : OutStream;
+    BEGIN
+      // Streams the object into TempBlob.Blob (in memory on the NAV Server - use DownloadToFile for very large objects).
+      CreateClient(ProfileCode,StorageClient);
+      CLEAR(TempBlob.Blob);
+      TempBlob.Blob.CREATEOUTSTREAM(OutStr);
+      CheckResult(StorageClient.DownloadToStream(ObjectKey,OutStr));
+    END;
+
+    PROCEDURE TryDownloadToBlob@7(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text;VAR TempBlob@1002 : Record 99008535) : Boolean;
+    BEGIN
+      StartTry;
+      IF TryDoDownloadToBlob(ProfileCode,ObjectKey,TempBlob) THEN
+        EXIT(TRUE);
+      EXIT(EndTryFailed);
+    END;
+
+    PROCEDURE DownloadToFile@8(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text;FilePath@1002 : Text);
+    BEGIN
+      // FilePath is a file on the NAV Server.
+      CreateClient(ProfileCode,StorageClient);
+      CheckResult(StorageClient.DownloadToFile(ObjectKey,FilePath));
+    END;
+
+    PROCEDURE DownloadToClient@9(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text;FileName@1002 : Text);
+    VAR
+      TempBlob@1003 : TEMPORARY Record 99008535;
+    BEGIN
+      // Windows client and Web client (Codeunit 419 BLOBExport -> DOWNLOADFROMSTREAM).
+      DownloadToBlob(ProfileCode,ObjectKey,TempBlob);
+      FileManagement.BLOBExport(TempBlob,FileName,TRUE);
+    END;
+
+    PROCEDURE Delete@10(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text);
+    BEGIN
+      // A missing object counts as success.
+      CreateClient(ProfileCode,StorageClient);
+      CheckResult(StorageClient.Delete(ObjectKey));
+    END;
+
+    PROCEDURE TryDelete@11(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text) : Boolean;
+    BEGIN
+      StartTry;
+      IF TryDoDelete(ProfileCode,ObjectKey) THEN
+        EXIT(TRUE);
+      EXIT(EndTryFailed);
+    END;
+
+    PROCEDURE Exists@12(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text) : Boolean;
+    VAR
+      Found@1002 : Boolean;
+      ErrorText@1003 : Text;
+    BEGIN
+      CreateClient(ProfileCode,StorageClient);
+      Found := StorageClient.Exists(ObjectKey);
+      IF Found THEN
+        EXIT(TRUE);
+      ErrorText := StorageClient.LastError;
+      CheckResult(ErrorText);
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE TryExists@13(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text;VAR Found@1002 : Boolean) : Boolean;
+    BEGIN
+      StartTry;
+      Found := FALSE;
+      IF TryDoExists(ProfileCode,ObjectKey,Found) THEN
+        EXIT(TRUE);
+      EXIT(EndTryFailed);
+    END;
+
+    PROCEDURE GetDownloadUrl@14(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text;ValidMinutes@1002 : Integer) : Text;
+    VAR
+      Url@1003 : Text;
+      ErrorText@1004 : Text;
+    BEGIN
+      // S3: pre-signed GET; Azure: service SAS (shared key) or the SAS of the profile. Not available in Entra ID mode.
+      CreateClient(ProfileCode,StorageClient);
+      Url := StorageClient.GetDownloadUrl(ObjectKey,ValidMinutes);
+      IF Url = '' THEN BEGIN
+        ErrorText := StorageClient.LastError;
+        IF ErrorText = '' THEN
+          ErrorText := UnknownErr;
+        CheckResult(ErrorText);
+      END;
+      EXIT(Url);
+    END;
+
+    PROCEDURE TryGetDownloadUrl@15(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text;ValidMinutes@1002 : Integer;VAR Url@1003 : Text) : Boolean;
+    BEGIN
+      StartTry;
+      Url := '';
+      IF TryDoGetDownloadUrl(ProfileCode,ObjectKey,ValidMinutes,Url) THEN
+        EXIT(TRUE);
+      EXIT(EndTryFailed);
+    END;
+
+    PROCEDURE TestConnection@16(ProfileCode@1000 : Code[20]) : Text;
+    VAR
+      Result@1001 : Text;
+    BEGIN
+      // '' on success, otherwise the error text (never raises an error).
+      StartTry;
+      IF NOT TryDoTestConnection(ProfileCode,Result) THEN BEGIN
+        EndTryFailed;
+        EXIT(LastErrorText);
+      END;
+      LastErrorText := Result;
+      EXIT(Result);
+    END;
+
+    PROCEDURE ShowConnectionTest@17(ProfileCode@1000 : Code[20]);
+    VAR
+      Result@1001 : Text;
+    BEGIN
+      Result := TestConnection(ProfileCode);
+      IF Result <> '' THEN
+        ERROR(ConnectionFailedErr,Result);
+      MESSAGE(ConnectionOkMsg,ProfileCode);
+    END;
+
+    PROCEDURE UploadTestFile@18(ProfileCode@1000 : Code[20]);
+    VAR
+      ObjectKey@1001 : Text;
+      Size@1002 : BigInteger;
+    BEGIN
+      // Upload, check and delete a small text object (proves write, read and delete permissions).
+      ObjectKey := 'nav-test/' + DELCHR(FORMAT(CREATEGUID),'=','{}') + '.txt';
+      CreateClient(ProfileCode,StorageClient);
+      CheckResult(StorageClient.UploadText(TestFileTxt,ObjectKey,'text/plain'));
+      Size := StorageClient.GetSize(ObjectKey);
+      IF Size < 0 THEN
+        ERROR(TestFileNotFoundErr,ObjectKey);
+      CheckResult(StorageClient.Delete(ObjectKey));
+      MESSAGE(TestFileOkMsg,ObjectKey,Size);
+    END;
+
+    PROCEDURE Describe@19(ProfileCode@1000 : Code[20]) : Text;
+    BEGIN
+      // Configuration summary without secrets (for support).
+      CreateClient(ProfileCode,StorageClient);
+      EXIT(StorageClient.Describe);
+    END;
+
+    PROCEDURE GetLastError@20() : Text;
+    BEGIN
+      // Error text of the last Try... function or TestConnection.
+      EXIT(LastErrorText);
+    END;
+
+    PROCEDURE SetSecret@21(VAR StorageProfile@1000 : Record 50403;Secret@1001 : Text);
+    VAR
+      ServicePassword@1002 : Record 1261;
+    BEGIN
+      // Same pattern as Table 1260.SavePassword: the secret lives in Table 1261 "Service Password",
+      // encrypted when the database has an encryption key. The caller saves StorageProfile.
+      IF Secret = '' THEN BEGIN
+        DeleteSecret(StorageProfile);
+        EXIT;
+      END;
+      IF ISNULLGUID(StorageProfile."Secret Key") OR NOT ServicePassword.GET(StorageProfile."Secret Key") THEN BEGIN
+        ServicePassword.SavePassword(Secret);
+        ServicePassword.INSERT(TRUE);
+        StorageProfile."Secret Key" := ServicePassword.Key;
+      END ELSE BEGIN
+        ServicePassword.SavePassword(Secret);
+        ServicePassword.MODIFY;
+      END;
+      IF GUIALLOWED AND NOT ENCRYPTIONKEYEXISTS THEN
+        MESSAGE(SecretNotEncryptedMsg);
+    END;
+
+    PROCEDURE GetSecret@22(StorageProfile@1000 : Record 50403) : Text;
+    VAR
+      ServicePassword@1001 : Record 1261;
+    BEGIN
+      IF ISNULLGUID(StorageProfile."Secret Key") THEN
+        EXIT('');
+      IF NOT ServicePassword.GET(StorageProfile."Secret Key") THEN
+        EXIT('');
+      EXIT(ServicePassword.GetPassword);
+    END;
+
+    PROCEDURE HasSecret@23(StorageProfile@1000 : Record 50403) : Boolean;
+    VAR
+      ServicePassword@1001 : Record 1261;
+    BEGIN
+      IF ISNULLGUID(StorageProfile."Secret Key") THEN
+        EXIT(FALSE);
+      EXIT(ServicePassword.GET(StorageProfile."Secret Key"));
+    END;
+
+    PROCEDURE DeleteSecret@24(VAR StorageProfile@1000 : Record 50403);
+    VAR
+      ServicePassword@1001 : Record 1261;
+    BEGIN
+      IF NOT ISNULLGUID(StorageProfile."Secret Key") THEN
+        IF ServicePassword.GET(StorageProfile."Secret Key") THEN
+          ServicePassword.DELETE;
+      CLEAR(StorageProfile."Secret Key");
+    END;
+
+    LOCAL PROCEDURE CheckSecret@30(StorageProfile@1000 : Record 50403);
+    BEGIN
+      IF NOT HasSecret(StorageProfile) THEN
+        ERROR(SecretMissingErr,StorageProfile.Code);
+    END;
+
+    LOCAL PROCEDURE CheckResult@31(Result@1000 : Text);
+    BEGIN
+      IF Result <> '' THEN
+        ERROR(StorageErr,Result);
+    END;
+
+    LOCAL PROCEDURE StartTry@32();
+    BEGIN
+      LastErrorText := '';
+      CLEARLASTERROR;
+    END;
+
+    LOCAL PROCEDURE EndTryFailed@33() : Boolean;
+    BEGIN
+      LastErrorText := GETLASTERRORTEXT;
+      IF LastErrorText = '' THEN
+        LastErrorText := UnknownErr;
+      EXIT(FALSE);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryDoUploadFile@40(ProfileCode@1000 : Code[20];FilePath@1001 : Text;ObjectKey@1002 : Text;ContentType@1003 : Text);
+    BEGIN
+      UploadFile(ProfileCode,FilePath,ObjectKey,ContentType);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryDoUploadBlob@41(ProfileCode@1000 : Code[20];VAR TempBlob@1001 : Record 99008535;ObjectKey@1002 : Text;ContentType@1003 : Text);
+    BEGIN
+      UploadBlob(ProfileCode,TempBlob,ObjectKey,ContentType);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryDoDownloadToBlob@42(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text;VAR TempBlob@1002 : Record 99008535);
+    BEGIN
+      DownloadToBlob(ProfileCode,ObjectKey,TempBlob);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryDoDelete@43(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text);
+    BEGIN
+      Delete(ProfileCode,ObjectKey);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryDoExists@44(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text;VAR Found@1002 : Boolean);
+    BEGIN
+      Found := Exists(ProfileCode,ObjectKey);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryDoGetDownloadUrl@45(ProfileCode@1000 : Code[20];ObjectKey@1001 : Text;ValidMinutes@1002 : Integer;VAR Url@1003 : Text);
+    BEGIN
+      Url := GetDownloadUrl(ProfileCode,ObjectKey,ValidMinutes);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryDoTestConnection@46(ProfileCode@1000 : Code[20];VAR Result@1001 : Text);
+    BEGIN
+      CreateClient(ProfileCode,StorageClient);
+      Result := StorageClient.TestConnection;
+    END;
+
+    BEGIN
+    {
+      nav2016-mailgraph - Codeunit 50402 "Object Storage Mgt."
+      https://github.com/nolotz/nav2016-mailgraph (MIT License)
+
+      Facade over NavMailGraph.ObjectStorageClient for Table 50403 "Object Storage Profile" (Azure Blob Storage with
+      shared key, SAS URL or Entra ID; Amazon S3 and S3-compatible storage). Object keys are relative to the
+      Key Prefix of the profile (the add-in prepends it).
+
+      Raising functions: UploadFile, UploadBlob, DownloadToBlob, DownloadToFile, DownloadToClient, Delete, Exists,
+      GetDownloadUrl, UploadTestFile, ShowConnectionTest, CreateClient.
+      Non-raising: TryUploadFile, TryUploadBlob, TryDownloadToBlob, TryDelete, TryExists, TryGetDownloadUrl
+      (Boolean, error text via GetLastError), TestConnection (returns '' or the error text).
+      Secrets: SetSecret, GetSecret, HasSecret, DeleteSecret (Table 1261 "Service Password").
+
+      Try functions only read the database (NAV 2016 try functions do not roll back writes).
+      Not compiled in CI - compile and test in C/SIDE (NAV 2016) before use.
+
+      NMG2.00  initial version
+    }
+    END.
+  }
+}
