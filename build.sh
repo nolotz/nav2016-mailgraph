@@ -42,6 +42,7 @@ if [[ "$RUN_TESTS" == "1" ]]; then
   fi
 fi
 
+if command -v sha256sum >/dev/null 2>&1; then SHA256="sha256sum"; else SHA256="shasum -a 256"; fi
 echo "==> dist/Add-ins (net462 payload for the NAV Server Add-ins folder)"
 rm -rf dist
 dotnet publish src/NavMailGraph/NavMailGraph.csproj -c "$CONFIG" -f net462 --no-build -o dist/Add-ins/NavMailGraph
@@ -50,6 +51,6 @@ dotnet publish src/NavMailGraph.Msal/NavMailGraph.Msal.csproj -c "$CONFIG" -f ne
 rm -f dist/Add-ins/NavMailGraph/Msal/NavMailGraph.dll dist/Add-ins/NavMailGraph/Msal/NavMailGraph.pdb dist/Add-ins/NavMailGraph/Msal/NavMailGraph.xml
 find dist -name '*.pdb' -delete
 mkdir -p dist/nav && cp -R nav/. dist/nav/
-( cd dist && find Add-ins nav -type f | sort | xargs shasum -a 256 > SHA256SUMS )
+( cd dist && find Add-ins nav -type f | sort | xargs $SHA256 > SHA256SUMS )
 echo "==> done: $(find dist/Add-ins -type f | wc -l | tr -d ' ') files in dist/Add-ins"
 cat dist/SHA256SUMS
